@@ -1,0 +1,17 @@
+{
+  "Author": "XA",
+  "Name": "XA Database",
+  "InternalName": "XADatabase",
+  "AssemblyVersion": "0.0.0.21",
+  "Punchline": "Parser of all databases.",
+  "Description": "Parser of all databases.",
+  "ApplicableVersion": "any",
+  "Tags": [
+    "xa",
+    "data",
+    "inventory",
+    "gil",
+    "database",
+    "utility"
+  ]
+}
