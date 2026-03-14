@@ -155,20 +155,6 @@ public static class FreeCompanyCollector
 
         // Try reading rank names from FC member list
         TryCollectRankNamesFromAddon();
-
-        try
-        {
-            var hsb = AtkStage.Instance()->RaptureAtkUnitManager->GetAddonByName("HousingSignBoard");
-            if (hsb != null && hsb->IsVisible)
-            {
-                Plugin.Log.Debug("[XA] HousingSignBoard addon is open — reading estate info.");
-                CollectEstateFromAddon((nint)hsb);
-            }
-        }
-        catch (Exception ex)
-        {
-            Plugin.Log.Error($"[XA] TryCollect Estate error: {ex.Message}");
-        }
     }
 
     /// <summary>

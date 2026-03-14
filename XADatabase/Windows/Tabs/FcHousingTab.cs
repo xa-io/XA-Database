@@ -146,7 +146,18 @@ public partial class MainWindow
         ImGui.Separator();
         ImGui.Spacing();
 
-        if (!string.IsNullOrEmpty(cachedPersonalEstate) || !string.IsNullOrEmpty(cachedApartment))
+        var sharedEstateEntries = cachedSharedEstates
+            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(entry => entry.Trim())
+            .Where(entry => entry.Length > 0)
+            .GroupBy(entry => XaCharacterSnapshotRepository.StripHousingOwnerSuffix(entry), StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
+
+        var personalEstateDisplay = XaCharacterSnapshotRepository.StripHousingOwnerSuffix(cachedPersonalEstate);
+        var apartmentDisplay = XaCharacterSnapshotRepository.StripHousingOwnerSuffix(cachedApartment);
+
+        if (!string.IsNullOrEmpty(personalEstateDisplay) || sharedEstateEntries.Count > 0 || !string.IsNullOrEmpty(apartmentDisplay))
         {
             using (var phTable = ImRaii.Table("PersonalHousingTable", 2, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
             {
@@ -156,18 +167,25 @@ public partial class MainWindow
                     ImGui.TableSetupColumn("Location", ImGuiTableColumnFlags.WidthStretch);
                     ImGui.TableHeadersRow();
 
-                    if (!string.IsNullOrEmpty(cachedPersonalEstate))
+                    if (!string.IsNullOrEmpty(personalEstateDisplay))
                     {
                         ImGui.TableNextRow();
                         ImGui.TableNextColumn(); ImGui.Text("Personal Estate");
-                        ImGui.TableNextColumn(); ImGui.Text(cachedPersonalEstate);
+                        ImGui.TableNextColumn(); ImGui.Text(personalEstateDisplay);
                     }
 
-                    if (!string.IsNullOrEmpty(cachedApartment))
+                    foreach (var sharedEstate in sharedEstateEntries)
+                    {
+                        ImGui.TableNextRow();
+                        ImGui.TableNextColumn(); ImGui.Text("Shared Estate");
+                        ImGui.TableNextColumn(); ImGui.Text(sharedEstate);
+                    }
+
+                    if (!string.IsNullOrEmpty(apartmentDisplay))
                     {
                         ImGui.TableNextRow();
                         ImGui.TableNextColumn(); ImGui.Text("Apartment");
-                        ImGui.TableNextColumn(); ImGui.Text(cachedApartment);
+                        ImGui.TableNextColumn(); ImGui.Text(apartmentDisplay);
                     }
                 }
             }

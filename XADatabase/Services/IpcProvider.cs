@@ -134,7 +134,7 @@ public sealed class IpcProvider : IDisposable
         getLastSnapshotResultJsonProvider.RegisterFunc(() => getLastSnapshotResultJson());
         searchItemsProvider.RegisterFunc((query) => searchItems(query));
 
-        log.Information("[XA] IPC handlers initialized (18 channels).");
+        log.Information($"[XA] IPC handlers initialized ({IpcContractInfo.ChannelCount} channels).");
     }
 
     public void Dispose()

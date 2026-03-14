@@ -2,7 +2,7 @@
 
 public static class Schema
 {
-    public const int CurrentVersion = 18;
+    public const int CurrentVersion = 19;
 
     public static readonly string[] CreateStatements =
     {
@@ -22,6 +22,7 @@ public static class Schema
             fc_points INTEGER NOT NULL DEFAULT 0,
             fc_estate TEXT NOT NULL DEFAULT '',
             personal_estate TEXT NOT NULL DEFAULT '',
+            shared_estates TEXT NOT NULL DEFAULT '',
             apartment TEXT NOT NULL DEFAULT '',
             gil INTEGER NOT NULL DEFAULT 0,
             retainer_gil INTEGER NOT NULL DEFAULT 0,

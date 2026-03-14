@@ -61,6 +61,7 @@ public sealed class Plugin : IDalamudPlugin
         // Initialize database
         DatabaseService = new DatabaseService(PluginInterface.GetPluginConfigDirectory());
         DatabaseService.InitializeSchema();
+        DatabaseService.RunHealthCheck();
         CharacterRepo = new CharacterRepository(DatabaseService);
         SnapshotRepo = new XaCharacterSnapshotRepository(DatabaseService);
         CurrencyRepo = new CurrencyRepository(DatabaseService);
@@ -126,8 +127,8 @@ public sealed class Plugin : IDalamudPlugin
 
         // Enable addon watcher — single callback for all transient addon closes
         AddonWatcher.Enable(
-            onAddonClose: (category, addonName, addonPtr) => MainWindow.OnAddonSaveTrigger(category, addonName, addonPtr),
-            onAddonOpen: (category, addonName, addonPtr) => MainWindow.OnAddonOpenTrigger(category)
+            onAddonClose: (trigger) => MainWindow.OnAddonSaveTrigger(trigger),
+            onAddonOpen: (trigger) => MainWindow.OnAddonOpenTrigger(trigger)
         );
 
         Log.Information($"[XA] Plugin loaded successfully.");
@@ -209,5 +210,5 @@ public sealed class Plugin : IDalamudPlugin
 
 internal static class BuildInfo
 {
-    public const string Version = "0.0.0.21";
+    public const string Version = "0.0.0.22";
 }

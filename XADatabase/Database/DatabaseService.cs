@@ -40,6 +40,7 @@ public sealed class DatabaseService : IDisposable
 
     private readonly string dbPath;
     private SqliteConnection? connection;
+    public DatabaseHealthCheckResult LastHealthCheck { get; private set; } = new();
 
     public DatabaseService(string pluginConfigDir)
     {
@@ -65,15 +66,98 @@ public sealed class DatabaseService : IDisposable
         return connection;
     }
 
+    public DatabaseHealthCheckResult RunHealthCheck()
+    {
+        var result = new DatabaseHealthCheckResult
+        {
+            DbPath = dbPath,
+            CheckedAtUtc = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"),
+        };
+
+        if (ActiveTransaction != null)
+        {
+            result.Summary = "Database health check skipped because a transaction is currently active.";
+            LastHealthCheck = result;
+            Plugin.Log.Information($"[XA] {result.Summary}");
+            return result;
+        }
+
+        try
+        {
+            var conn = GetConnection();
+
+            using (var readCmd = conn.CreateCommand())
+            {
+                readCmd.CommandText = "SELECT COUNT(*) FROM sqlite_master";
+                readCmd.ExecuteScalar();
+                result.ReadOk = true;
+            }
+
+            using (var integrityCmd = conn.CreateCommand())
+            {
+                integrityCmd.CommandText = "PRAGMA quick_check(1)";
+                var integrity = integrityCmd.ExecuteScalar()?.ToString() ?? string.Empty;
+                result.IntegrityOk = string.Equals(integrity, "ok", StringComparison.OrdinalIgnoreCase);
+                if (!result.IntegrityOk)
+                    result.Error = string.IsNullOrWhiteSpace(integrity) ? "quick_check returned an empty result." : integrity;
+            }
+
+            using (var beginCmd = conn.CreateCommand())
+            {
+                beginCmd.CommandText = "BEGIN IMMEDIATE";
+                beginCmd.ExecuteNonQuery();
+            }
+
+            using (var rollbackCmd = conn.CreateCommand())
+            {
+                rollbackCmd.CommandText = "ROLLBACK";
+                rollbackCmd.ExecuteNonQuery();
+            }
+
+            result.WriteOk = true;
+            result.Success = result.ReadOk && result.WriteOk && result.IntegrityOk;
+            result.Summary = result.Success
+                ? "Database read/write health check passed."
+                : $"Database integrity check returned: {result.Error}";
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                var conn = GetConnection();
+                using var rollbackCmd = conn.CreateCommand();
+                rollbackCmd.CommandText = "ROLLBACK";
+                rollbackCmd.ExecuteNonQuery();
+            }
+            catch
+            {
+            }
+
+            result.Error = ex.Message;
+            result.Success = false;
+            result.Summary = $"Database health check failed: {ex.Message}";
+        }
+
+        LastHealthCheck = result;
+
+        if (result.Success)
+            Plugin.Log.Information($"[XA] {result.Summary} ({dbPath})");
+        else
+            Plugin.Log.Error($"[XA] {result.Summary} ({dbPath})");
+
+        return result;
+    }
+
     public void InitializeSchema()
     {
         var conn = GetConnection();
         var currentVersion = GetSchemaVersion();
         var needsXaUpgrade = NeedsXaCharactersUpgrade();
         var needsRegionUpgrade = TableExists("xa_characters") && !ColumnExists("xa_characters", "region");
+        var needsSharedEstatesUpgrade = TableExists("xa_characters") && !ColumnExists("xa_characters", "shared_estates");
         var needsLegacyCleanup = GetXaCharacterCount() > 0 && HasLegacyTables();
 
-        if (currentVersion >= Schema.CurrentVersion && !needsXaUpgrade && !needsRegionUpgrade && !needsLegacyCleanup)
+        if (currentVersion >= Schema.CurrentVersion && !needsXaUpgrade && !needsRegionUpgrade && !needsSharedEstatesUpgrade && !needsLegacyCleanup)
         {
             Plugin.Log.Information($"[XA] Database schema is up to date (v{currentVersion}).");
             return;
@@ -133,6 +217,12 @@ public sealed class DatabaseService : IDisposable
 
             if (currentVersion < 18 || needsRegionUpgrade)
                 Plugin.Log.Information("[XA] Applied schema migration v17 → v18 (xa_characters region column)");
+
+            if (needsSharedEstatesUpgrade)
+                AddXaCharacterSharedEstatesColumn(conn, transaction);
+
+            if (currentVersion < 19 || needsSharedEstatesUpgrade)
+                Plugin.Log.Information("[XA] Applied schema migration v18 → v19 (xa_characters shared_estates column)");
 
             if (GetXaCharacterCount() > 0 && HasLegacyTables())
                 DropLegacyTablesInternal(conn, transaction);
@@ -257,6 +347,7 @@ public sealed class DatabaseService : IDisposable
         int fcPoints,
         string fcEstate,
         string personalEstate,
+        string sharedEstates,
         string apartment,
         int gil,
         int retainerGil,
@@ -273,6 +364,7 @@ public sealed class DatabaseService : IDisposable
         string updatedUtc)
     {
         var conn = GetConnection();
+        var normalizedHousing = XaCharacterSnapshotRepository.NormalizeHousingPayload(personalEstate, sharedEstates, apartment);
         using var cmd = conn.CreateCommand();
         if (ActiveTransaction != null)
             cmd.Transaction = ActiveTransaction;
@@ -289,6 +381,7 @@ public sealed class DatabaseService : IDisposable
                 fc_points,
                 fc_estate,
                 personal_estate,
+                shared_estates,
                 apartment,
                 gil,
                 retainer_gil,
@@ -336,6 +429,7 @@ public sealed class DatabaseService : IDisposable
                 @fc_points,
                 @fc_estate,
                 @personal_estate,
+                @shared_estates,
                 @apartment,
                 @gil,
                 @retainer_gil,
@@ -382,6 +476,7 @@ public sealed class DatabaseService : IDisposable
                 fc_points = excluded.fc_points,
                 fc_estate = excluded.fc_estate,
                 personal_estate = excluded.personal_estate,
+                shared_estates = excluded.shared_estates,
                 apartment = excluded.apartment,
                 gil = excluded.gil,
                 retainer_gil = excluded.retainer_gil,
@@ -426,8 +521,9 @@ public sealed class DatabaseService : IDisposable
         cmd.Parameters.AddWithValue("@fc_tag", fcTag ?? string.Empty);
         cmd.Parameters.AddWithValue("@fc_points", fcPoints);
         cmd.Parameters.AddWithValue("@fc_estate", fcEstate ?? string.Empty);
-        cmd.Parameters.AddWithValue("@personal_estate", personalEstate ?? string.Empty);
-        cmd.Parameters.AddWithValue("@apartment", apartment ?? string.Empty);
+        cmd.Parameters.AddWithValue("@personal_estate", normalizedHousing.PersonalEstate);
+        cmd.Parameters.AddWithValue("@shared_estates", normalizedHousing.SharedEstates);
+        cmd.Parameters.AddWithValue("@apartment", normalizedHousing.Apartment);
         cmd.Parameters.AddWithValue("@gil", gil);
         cmd.Parameters.AddWithValue("@retainer_gil", retainerGil);
         cmd.Parameters.AddWithValue("@retainer_count", retainerCount);
@@ -617,6 +713,14 @@ public sealed class DatabaseService : IDisposable
         }
     }
 
+    private void AddXaCharacterSharedEstatesColumn(SqliteConnection conn, SqliteTransaction transaction)
+    {
+        if (!TableExists("xa_characters") || ColumnExists("xa_characters", "shared_estates"))
+            return;
+
+        ExecuteNonQuery(conn, transaction, "ALTER TABLE xa_characters ADD COLUMN shared_estates TEXT NOT NULL DEFAULT ''");
+    }
+
     private bool HasLegacyTables() => LegacyTables.Any(TableExists);
 
     private void UpgradeXaCharactersTable(SqliteConnection conn, SqliteTransaction transaction)
@@ -684,6 +788,7 @@ public sealed class DatabaseService : IDisposable
                 datacenter,
                 region,
                 legacyRow.PersonalEstate,
+                string.Empty,
                 legacyRow.Apartment,
                 legacyRow.Gil,
                 legacyRow.RetainerGil,
@@ -704,6 +809,7 @@ public sealed class DatabaseService : IDisposable
                 legacyRow.FcPoints,
                 legacyRow.FcEstate,
                 legacyRow.PersonalEstate,
+                string.Empty,
                 legacyRow.Apartment,
                 legacyRow.Gil,
                 legacyRow.RetainerGil,

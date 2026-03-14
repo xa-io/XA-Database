@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Dalamud.Game.Addon.Lifecycle;
 using Dalamud.Game.Addon.Lifecycle.AddonArgTypes;
 using Dalamud.Plugin.Services;
+using FFXIVClientStructs.FFXIV.Component.GUI;
 
 namespace XADatabase.Services;
 
@@ -15,8 +16,8 @@ public sealed class AddonWatcher : IDisposable
 {
     private readonly IAddonLifecycle addonLifecycle;
     private readonly IPluginLog log;
-    private Action<string, string, nint>? onAddonClose;
-    private Action<string, string, nint>? onAddonOpen;
+    private Action<AddonTriggerEvent>? onAddonClose;
+    private Action<AddonTriggerEvent>? onAddonOpen;
 
     // Debug: track which addons are currently open
     private readonly HashSet<string> openAddons = new();
@@ -32,18 +33,25 @@ public sealed class AddonWatcher : IDisposable
     // These trigger auto-save when they close.
     private static readonly (string Category, string[] Addons)[] TransientGroups =
     {
-        ("Retainer", new[] { "RetainerList", "InventoryRetainer", "InventoryRetainerLarge", "RetainerSellList" }),
+        ("Inventory", new[] { "Character", "RecommendEquip", "GearSetList" }),
+        ("Retainer", new[] { "RetainerList", "InventoryRetainer", "InventoryRetainerLarge", "RetainerSellList", "RetainerCharacter", "Bank" }),
         ("Saddlebag", new[] { "InventoryBuddy" }),
-        ("Market", new[] { "ItemSearch", "ItemSearchResult" }),
-        ("FC Chest", new[] { "FreeCompanyChest" }),
+        ("Journal", new[] { "Journal" }),
+        ("Market", new[] { "ItemSearch", "ItemSearchResult", "ItemHistory" }),
+        ("NPC", new[] { "Repair", "Shop", "LetterList", "LetterViewer" }),
+        ("FC Chest", new[] { "FreeCompanyChest", "FreeCompanyChestLog" }),
         ("Armoire", new[] { "Cabinet" }),
         ("Armoury Chest", new[] { "ArmouryBoard" }),
         ("Glamour Dresser", new[] { "MiragePrismBox", "MiragePrismMiragePlate", "MiragePrismPrismBox" }),
         ("FC Members", new[] { "FreeCompany", "FreeCompanyProfile" }),
-        ("Estate", new[] { "HousingSignBoard" }),
+        ("Estate", new[] { "HousingSignBoard", "TeleportTown", "HousingSelectBlock", "HousingMenu",
+            "HousingGoods", "HousingGoodsStain", "HousingEditExterior", "HousingInteriorPattern",
+            "HousingSubmenu", "HousingSelectHouse", "HousingConfig", "HousingGuestBook",
+            "OrchestrionPlayList", "OrchestrionPlayListEdit" }),
         ("Workshop", new[] { "SubmarinePartsMenu", "SubmarineExplorationMapSelect",
             "AirShipExploration", "AirShipExplorationDetail", "AirShipExplorationResult",
-            "CompanyCraftSupply" }),
+            "CompanyCraftSupply", "FreeCompanyCreditShop", "CompanyCraftRecipeNoteBook" }),
+        ("Menu", new[] { "InputString" }),
     };
 
     // Flat lookup for category by addon name
@@ -73,7 +81,7 @@ public sealed class AddonWatcher : IDisposable
         this.log = log;
     }
 
-    public void Enable(Action<string, string, nint>? onAddonClose = null, Action<string, string, nint>? onAddonOpen = null)
+    public void Enable(Action<AddonTriggerEvent>? onAddonClose = null, Action<AddonTriggerEvent>? onAddonOpen = null)
     {
         this.onAddonClose = onAddonClose;
         this.onAddonOpen = onAddonOpen;
@@ -127,9 +135,19 @@ public sealed class AddonWatcher : IDisposable
         if (onAddonOpen != null && !PersistentAddonNames.Contains(name))
         {
             var category = AddonToCategory.GetValueOrDefault(name, "Unknown");
+            var addonDetail = ResolveAddonDetail(name, args.Addon);
             try
             {
-                onAddonOpen.Invoke(category, name, args.Addon);
+                onAddonOpen.Invoke(new AddonTriggerEvent
+                {
+                    Kind = AddonTriggerKind.Open,
+                    Category = category,
+                    AddonName = name,
+                    AddonDetail = addonDetail,
+                    AddonPtr = args.Addon,
+                    IsPersistent = false,
+                    TriggersSave = false,
+                });
             }
             catch (Exception ex)
             {
@@ -150,11 +168,21 @@ public sealed class AddonWatcher : IDisposable
         openAddons.Remove(name);
 
         var category = AddonToCategory.GetValueOrDefault(name, "Unknown");
+        var addonDetail = ResolveAddonDetail(name, args.Addon);
         log.Information($"[XA] Addon closed: {name} ({category}) — triggering save.");
 
         try
         {
-            onAddonClose?.Invoke(category, name, args.Addon);
+            onAddonClose?.Invoke(new AddonTriggerEvent
+            {
+                Kind = AddonTriggerKind.Close,
+                Category = category,
+                AddonName = name,
+                AddonDetail = addonDetail,
+                AddonPtr = args.Addon,
+                IsPersistent = false,
+                TriggersSave = true,
+            });
         }
         catch (Exception ex)
         {
@@ -173,6 +201,79 @@ public sealed class AddonWatcher : IDisposable
 
     /// <summary>Transient addon groups (trigger auto-save on close).</summary>
     public static (string Category, string[] Addons)[] GetTransientGroups() => TransientGroups;
+
+    private static unsafe string ResolveAddonDetail(string addonName, nint addonPtr)
+    {
+        if (addonPtr == nint.Zero)
+            return addonName;
+
+        try
+        {
+            var addon = (AtkUnitBase*)addonPtr;
+            var texts = AddonTextReader.ReadAllText(addon);
+
+            return addonName switch
+            {
+                "HousingMenu" => ResolveHousingMenuDetail(texts),
+                "HousingSubmenu" => ResolveHousingSubmenuDetail(texts),
+                "HousingSelectHouse" => ResolveHousingSelectHouseDetail(texts),
+                _ => addonName,
+            };
+        }
+        catch
+        {
+            return addonName;
+        }
+    }
+
+    private static string ResolveHousingMenuDetail(List<(string Path, uint NodeId, string Text)> texts)
+    {
+        var count = texts.Count;
+        return count switch
+        {
+            2 => "HousingMenuWorkshop",
+            3 => "HousingMenuLobby",
+            8 => "HousingMenuApartment",
+            9 => "HousingMenuHouse",
+            10 => "HousingMenuMain",
+            _ => count > 0 ? $"HousingMenu({count})" : "HousingMenu",
+        };
+    }
+
+    private static string ResolveHousingSubmenuDetail(List<(string Path, uint NodeId, string Text)> texts)
+    {
+        foreach (var (_, _, text) in texts)
+        {
+            if (text.Equals("Apartment Options", StringComparison.OrdinalIgnoreCase)
+                || text.Equals("View Room Details", StringComparison.OrdinalIgnoreCase))
+                return "HousingSubmenuApartment";
+            if (text.Equals("Free Company Estate", StringComparison.OrdinalIgnoreCase))
+                return "HousingSubmenuFreeCompany";
+            if (text.Equals("Private Estate", StringComparison.OrdinalIgnoreCase))
+                return "HousingSubmenuPersonal";
+            if (text.Contains("Shared Estate", StringComparison.OrdinalIgnoreCase))
+                return "HousingSubmenuShared";
+        }
+
+        return "HousingSubmenu";
+    }
+
+    private static string ResolveHousingSelectHouseDetail(List<(string Path, uint NodeId, string Text)> texts)
+    {
+        var optionCount = 0;
+        foreach (var (_, _, text) in texts)
+        {
+            if (text.Equals("Apartment", StringComparison.OrdinalIgnoreCase)
+                || text.Equals("Free Company Estate", StringComparison.OrdinalIgnoreCase)
+                || text.Equals("Private Estate", StringComparison.OrdinalIgnoreCase)
+                || text.Contains("Shared Estate", StringComparison.OrdinalIgnoreCase))
+            {
+                optionCount++;
+            }
+        }
+
+        return optionCount > 0 ? $"HousingSelectHouse({optionCount})" : "HousingSelectHouse";
+    }
 
     public void Dispose() => Disable();
 }

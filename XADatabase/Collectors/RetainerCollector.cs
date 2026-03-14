@@ -12,9 +12,18 @@ public static class RetainerCollector
 {
     private static readonly string[] TownNames =
     {
-        "", "Limsa Lominsa", "Gridania", "Ul'dah", "Ishgard",
-        "", "", "Kugane", "", "",
-        "Crystarium", "", "Old Sharlayan",
+        "Limsa Lominsa", "Gridania", "Ul'dah", "Ishgard",
+        "Kugane", "Crystarium", "Old Sharlayan", "Tuliyollal",
+    };
+    private static readonly InventoryType[] RetainerPages =
+    {
+        InventoryType.RetainerPage1,
+        InventoryType.RetainerPage2,
+        InventoryType.RetainerPage3,
+        InventoryType.RetainerPage4,
+        InventoryType.RetainerPage5,
+        InventoryType.RetainerPage6,
+        InventoryType.RetainerPage7,
     };
 
     public static unsafe List<RetainerEntry> CollectRetainerList()
@@ -95,6 +104,48 @@ public static class RetainerCollector
         return activeRetainer->RetainerId;
     }
 
+    public static unsafe bool IsActiveRetainerMarketLoaded()
+    {
+        var retainerManager = RetainerManager.Instance();
+        if (retainerManager == null || !retainerManager->IsReady)
+            return false;
+
+        var activeRetainer = retainerManager->GetActiveRetainer();
+        if (activeRetainer == null || activeRetainer->RetainerId == 0)
+            return false;
+
+        var inventoryManager = InventoryManager.Instance();
+        if (inventoryManager == null)
+            return false;
+
+        var marketContainer = inventoryManager->GetInventoryContainer(InventoryType.RetainerMarket);
+        return marketContainer != null && marketContainer->IsLoaded;
+    }
+
+    public static unsafe bool IsActiveRetainerInventoryLoaded()
+    {
+        var retainerManager = RetainerManager.Instance();
+        if (retainerManager == null || !retainerManager->IsReady)
+            return false;
+
+        var activeRetainer = retainerManager->GetActiveRetainer();
+        if (activeRetainer == null || activeRetainer->RetainerId == 0)
+            return false;
+
+        var inventoryManager = InventoryManager.Instance();
+        if (inventoryManager == null)
+            return false;
+
+        foreach (var page in RetainerPages)
+        {
+            var container = inventoryManager->GetInventoryContainer(page);
+            if (container != null && container->IsLoaded)
+                return true;
+        }
+
+        return false;
+    }
+
     public static unsafe List<RetainerListingEntry> CollectActiveRetainerListings(IDataManager dataManager)
     {
         var results = new List<RetainerListingEntry>();
@@ -168,21 +219,9 @@ public static class RetainerCollector
 
         var itemSheet = dataManager.GetExcelSheet<Item>();
 
-        // Retainer inventory pages
-        var retainerPages = new[]
+        for (int p = 0; p < RetainerPages.Length; p++)
         {
-            InventoryType.RetainerPage1,
-            InventoryType.RetainerPage2,
-            InventoryType.RetainerPage3,
-            InventoryType.RetainerPage4,
-            InventoryType.RetainerPage5,
-            InventoryType.RetainerPage6,
-            InventoryType.RetainerPage7,
-        };
-
-        for (int p = 0; p < retainerPages.Length; p++)
-        {
-            var container = inventoryManager->GetInventoryContainer(retainerPages[p]);
+            var container = inventoryManager->GetInventoryContainer(RetainerPages[p]);
             if (container == null || !container->IsLoaded)
                 continue;
 
@@ -199,7 +238,7 @@ public static class RetainerCollector
                 results.Add(new ContainerItemEntry
                 {
                     ContainerName = $"Retainer Page {p + 1}",
-                    ContainerType = (int)retainerPages[p],
+                    ContainerType = (int)RetainerPages[p],
                     SlotIndex = i,
                     ItemId = slot->ItemId,
                     ItemName = itemName,

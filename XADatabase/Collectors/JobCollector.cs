@@ -72,8 +72,8 @@ public static class JobCollector
             if (!classJobSheet.TryGetRow(rowId, out var classJob))
                 continue;
 
-            var abbr = classJob.Abbreviation.ToString();
-            var name = classJob.Name.ToString();
+            var abbr = (classJob.Abbreviation.ToString() ?? string.Empty).Trim().ToUpperInvariant();
+            var name = (classJob.Name.ToString() ?? string.Empty).Trim().ToUpperInvariant();
 
             short level = playerState.GetClassJobLevel(classJob);
             bool isUnlocked = level > 0;

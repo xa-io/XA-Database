@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using Lumina.Excel.Sheets;
@@ -43,9 +44,9 @@ public static class ItemCollector
         ("Premium Saddlebag 2", InventoryType.PremiumSaddleBag2),
     };
 
-    public static unsafe List<ContainerItemEntry> Collect(IDataManager dataManager)
+    public static unsafe ItemCollectionResult Collect(IDataManager dataManager)
     {
-        var results = new List<ContainerItemEntry>();
+        var results = new ItemCollectionResult();
         var itemSheet = dataManager.GetExcelSheet<Item>();
 
         var inventoryManager = InventoryManager.Instance();
@@ -58,6 +59,8 @@ public static class ItemCollector
             if (container == null || !container->IsLoaded)
                 continue;
 
+            results.LoadedContainers.Add(containerName);
+
             for (int i = 0; i < container->Size; i++)
             {
                 var slot = container->GetInventorySlot(i);
@@ -69,7 +72,7 @@ public static class ItemCollector
                 if (itemSheet.TryGetRow(baseItemId, out var itemRow))
                     itemName = itemRow.Name.ToString();
 
-                results.Add(new ContainerItemEntry
+                results.Items.Add(new ContainerItemEntry
                 {
                     ContainerName = containerName,
                     ContainerType = (int)invType,
@@ -83,5 +86,16 @@ public static class ItemCollector
         }
 
         return results;
+    }
+}
+
+public sealed class ItemCollectionResult
+{
+    public List<ContainerItemEntry> Items { get; } = new();
+    public HashSet<string> LoadedContainers { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public bool WasContainerLoaded(string containerName)
+    {
+        return LoadedContainers.Contains(containerName);
     }
 }

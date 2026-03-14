@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
 using System.Text.Json;
+using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
@@ -41,6 +42,7 @@ public partial class MainWindow : Window, IDisposable
     private List<ActiveQuestEntry> cachedQuests = new();
     private List<MsqMilestoneEntry> cachedMsqMilestones = new();
     private string cachedPersonalEstate = string.Empty;
+    private string cachedSharedEstates = string.Empty;
     private string cachedApartment = string.Empty;
     public bool DataCollected { get; private set; }
     private bool charListQueried;
@@ -173,6 +175,8 @@ public partial class MainWindow : Window, IDisposable
                 : GetCharacterName();
             var summary = new
             {
+                ipcContractVersion = IpcContractInfo.CurrentVersion,
+                characterSummaryVersion = IpcContractInfo.CharacterSummaryJsonVersion,
                 version = BuildInfo.Version,
                 contentId,
                 characterName,
@@ -188,6 +192,7 @@ public partial class MainWindow : Window, IDisposable
                 trigger = lastSnapshotResult?.Trigger.ToString() ?? string.Empty,
                 triggerDetail = lastSnapshotResult?.TriggerDetail ?? string.Empty,
                 lastSnapshotAtUtc = lastSnapshotResult?.SavedAtUtc ?? string.Empty,
+                snapshotQuality = lastSnapshotResult?.Quality ?? GetSnapshotQualityLabel(),
                 warnings = lastSnapshotResult?.Warnings ?? new List<string>()
             };
             return JsonSerializer.Serialize(summary);
@@ -264,20 +269,27 @@ public partial class MainWindow : Window, IDisposable
 
         var localPlayer = Plugin.ObjectTable.LocalPlayer;
         var isOnHomeworld = localPlayer == null || localPlayer.CurrentWorld.RowId == localPlayer.HomeWorld.RowId;
+        var hasReliableLiveCharacterContext = localPlayer != null
+            && !Plugin.Condition[ConditionFlag.BetweenAreas]
+            && !Plugin.Condition[ConditionFlag.BetweenAreas51];
 
         try
         {
-            cachedCurrencies = CurrencyCollector.Collect();
+            cachedCurrencies = CurrencyCollector.Collect(Plugin.DataManager);
             cachedJobs = JobCollector.Collect(Plugin.PlayerState, Plugin.DataManager);
             cachedInventory = InventoryCollector.Collect();
-            cachedItems = ItemCollector.Collect(Plugin.DataManager);
+            var itemCollection = ItemCollector.Collect(Plugin.DataManager);
+            lastLiveCollectedItems = itemCollection.Items.Select(CloneContainerItem).ToList();
+            lastLoadedItemContainers.Clear();
+            foreach (var containerName in itemCollection.LoadedContainers)
+                lastLoadedItemContainers.Add(containerName);
+            cachedItems = itemCollection.Items;
             // Retainers: only overwrite if live collector returns data (requires summoning bell)
             var freshRetainers = RetainerCollector.CollectRetainerList();
             if (freshRetainers.Count > 0)
                 cachedRetainers = freshRetainers;
-            var freshListings = RetainerCollector.CollectActiveRetainerListings(Plugin.DataManager);
-            if (freshListings.Count > 0)
-                cachedListings = freshListings;
+            MergeActiveRetainerListings();
+            MergeActiveRetainerInventory();
             var freshMembers = FcMemberCollector.Collect(Plugin.DataManager);
             // Try reading from currently-open FC/Estate addons before Collect()
             FreeCompanyCollector.TryCollectFromOpenAddons();
@@ -318,6 +330,7 @@ public partial class MainWindow : Window, IDisposable
             cachedMsqMilestones = QuestCollector.CollectMsqProgress();
             var housing = HousingCollector.CollectPersonalHousing();
             cachedPersonalEstate = housing.PersonalEstate;
+            cachedSharedEstates = housing.SharedEstates;
             cachedApartment = housing.Apartment;
 
             var persistedSnapshot = plugin.SnapshotRepo.GetSnapshot(playerState.ContentId);
@@ -329,20 +342,73 @@ public partial class MainWindow : Window, IDisposable
                 cachedRetainerItems.Clear();
             }
 
-            // If FC collect returned null (e.g. world visiting), load persisted data from DB
+            ApplyPersistedSaddlebagState(persistedSnapshot, allowObservedSaddlebagClear: false);
+            ApplyPersistedSaddlebagInventorySummaries(persistedSnapshot, allowObservedSaddlebagClear: false);
+
+            if (string.IsNullOrEmpty(cachedPersonalEstate) && !hasReliableLiveCharacterContext && persistedSnapshot != null)
+                cachedPersonalEstate = persistedSnapshot.Row.PersonalEstate;
+            if (string.IsNullOrEmpty(cachedSharedEstates) && persistedSnapshot != null)
+                cachedSharedEstates = persistedSnapshot.Row.SharedEstates;
+            if (string.IsNullOrEmpty(cachedApartment) && !hasReliableLiveCharacterContext && persistedSnapshot != null)
+                cachedApartment = persistedSnapshot.Row.Apartment;
+            if (persistedSnapshot != null)
+                cachedPersonalEstate = XaCharacterSnapshotRepository.PreferSizedPersonalEstateValue(cachedPersonalEstate, persistedSnapshot.Row.PersonalEstate);
+
             if (cachedFc == null)
             {
-                if (isOnHomeworld)
+                if (persistedSnapshot != null && (!isOnHomeworld || !hasReliableLiveCharacterContext) && persistedSnapshot.FreeCompany != null)
+                {
+                    cachedFc = new FreeCompanyEntry
+                    {
+                        FcId = persistedSnapshot.FreeCompany.FcId,
+                        Name = persistedSnapshot.FreeCompany.Name,
+                        Tag = persistedSnapshot.FreeCompany.Tag,
+                        Master = persistedSnapshot.FreeCompany.Master,
+                        Rank = persistedSnapshot.FreeCompany.Rank,
+                        GrandCompany = persistedSnapshot.FreeCompany.GrandCompany,
+                        GrandCompanyName = persistedSnapshot.FreeCompany.GrandCompanyName,
+                        OnlineMembers = persistedSnapshot.FreeCompany.OnlineMembers,
+                        TotalMembers = persistedSnapshot.FreeCompany.TotalMembers,
+                        HomeWorldId = persistedSnapshot.FreeCompany.HomeWorldId,
+                        FcPoints = persistedSnapshot.FreeCompany.FcPoints,
+                        Estate = persistedSnapshot.FreeCompany.Estate,
+                    };
+                }
+                else if (isOnHomeworld && hasReliableLiveCharacterContext)
+                {
                     ClearPersistedFreeCompanyState();
-                else if (persistedSnapshot != null)
-                    cachedFc = persistedSnapshot.FreeCompany;
+                }
+            }
+            else if (persistedSnapshot?.FreeCompany != null)
+            {
+                var persistedFc = persistedSnapshot.FreeCompany;
+                if (cachedFc.FcId == 0 && persistedFc.FcId != 0)
+                    cachedFc.FcId = persistedFc.FcId;
+                if (string.IsNullOrEmpty(cachedFc.Name) && !string.IsNullOrEmpty(persistedFc.Name))
+                    cachedFc.Name = persistedFc.Name;
+                if (string.IsNullOrEmpty(cachedFc.Tag) && !string.IsNullOrEmpty(persistedFc.Tag))
+                    cachedFc.Tag = persistedFc.Tag;
+                if (string.IsNullOrEmpty(cachedFc.Master) && !string.IsNullOrEmpty(persistedFc.Master))
+                    cachedFc.Master = persistedFc.Master;
+                if (cachedFc.Rank == 0 && persistedFc.Rank > 0)
+                    cachedFc.Rank = persistedFc.Rank;
+                if (cachedFc.GrandCompany == 0 && persistedFc.GrandCompany > 0)
+                    cachedFc.GrandCompany = persistedFc.GrandCompany;
+                if (string.IsNullOrEmpty(cachedFc.GrandCompanyName) && !string.IsNullOrEmpty(persistedFc.GrandCompanyName))
+                    cachedFc.GrandCompanyName = persistedFc.GrandCompanyName;
+                if (cachedFc.TotalMembers == 0 && persistedFc.TotalMembers > 0)
+                    cachedFc.TotalMembers = persistedFc.TotalMembers;
+                if (cachedFc.HomeWorldId == 0 && persistedFc.HomeWorldId > 0)
+                    cachedFc.HomeWorldId = persistedFc.HomeWorldId;
+                if (cachedFc.FcPoints == 0 && persistedFc.FcPoints > 0)
+                    cachedFc.FcPoints = persistedFc.FcPoints;
+                if (string.IsNullOrEmpty(cachedFc.Estate) && !string.IsNullOrEmpty(persistedFc.Estate))
+                    cachedFc.Estate = persistedFc.Estate;
             }
 
-            // Seed FC points / estate from DB so they persist across sessions
             if (cachedFc != null)
             {
                 FreeCompanyCollector.SeedPersistedValues(cachedFc.FcPoints, cachedFc.Estate, cachedFc.Name, cachedFc.Tag, cachedFc.Rank);
-                // Re-apply seeded values to cached entry
                 if (cachedFc.FcPoints == 0 && FreeCompanyCollector.LastFcPoints > 0)
                     cachedFc.FcPoints = FreeCompanyCollector.LastFcPoints;
                 if (cachedFc.Rank == 0 && FreeCompanyCollector.LastFcRank > 0)
@@ -355,12 +421,31 @@ public partial class MainWindow : Window, IDisposable
                     cachedFc.Tag = FreeCompanyCollector.LastFcTag;
             }
 
+            if (cachedFc != null && cachedFcMembers.Count == 0 && persistedSnapshot != null && persistedSnapshot.FcMembers.Count > 0)
+            {
+                cachedFcMembers = persistedSnapshot.FcMembers.Select(member => new FcMemberEntry
+                {
+                    ContentId = member.ContentId,
+                    Name = member.Name,
+                    Job = member.Job,
+                    JobName = member.JobName,
+                    OnlineStatus = member.OnlineStatus,
+                    CurrentWorld = member.CurrentWorld,
+                    CurrentWorldName = member.CurrentWorldName,
+                    HomeWorld = member.HomeWorld,
+                    HomeWorldName = member.HomeWorldName,
+                    GrandCompany = member.GrandCompany,
+                    RankSort = member.RankSort,
+                    RankName = member.RankName,
+                }).ToList();
+            }
+
             // Load persisted squadron data from DB if not in barracks
             if (cachedSquadron == null && persistedSnapshot != null)
                 cachedSquadron = persistedSnapshot.Squadron;
 
             // Load persisted voyage data from DB if not in workshop
-            if (cachedVoyages == null && persistedSnapshot != null)
+            if (cachedVoyages == null && cachedFc != null && persistedSnapshot != null)
                 cachedVoyages = persistedSnapshot.Voyages;
 
             // Personal housing: no DB fallback needed here — GetOwnedHouseId works from anywhere.
@@ -395,14 +480,17 @@ public partial class MainWindow : Window, IDisposable
     /// Called by AddonWatcher when a tracked game window opens.
     /// For Workshop: collects voyage data immediately (only available while panel is open).
     /// </summary>
-    public void OnAddonOpenTrigger(string category)
+    public void OnAddonOpenTrigger(AddonTriggerEvent trigger)
     {
         if (!Plugin.PlayerState.IsLoaded || viewingContentId.HasValue)
             return;
 
-        AddTaskLog($"[XA.DB TASK] Addon opened: {category}");
+        lastAddonTrigger = trigger;
+        if (trigger.Category == "Estate")
+            HousingCollector.ObserveEstateAddonDetail(trigger.AddonName, trigger.AddonDetail);
+        AddTaskLog($"[XA.DB TASK] Addon opened: {trigger.Category} / {trigger.AddonName}");
 
-        if (category != "Workshop")
+        if (trigger.Category != "Workshop")
             return;
 
         try
@@ -415,6 +503,7 @@ public partial class MainWindow : Window, IDisposable
         catch (Exception ex)
         {
             Plugin.Log.Error($"[XA] Workshop open collect error: {ex}");
+            QueueCollectorWarning("Addon watcher failed to collect workshop voyage data while the workshop window was open.");
         }
     }
 
@@ -424,39 +513,48 @@ public partial class MainWindow : Window, IDisposable
     /// Reads addon text nodes at close time when data is fully populated,
     /// then triggers refresh+save.
     /// </summary>
-    public void OnAddonSaveTrigger(string category, string addonName, nint addonPtr)
+    public void OnAddonSaveTrigger(AddonTriggerEvent trigger)
     {
         if (!Plugin.PlayerState.IsLoaded || viewingContentId.HasValue)
             return;
+
+        lastAddonTrigger = trigger;
+        if (trigger.Category == "Estate")
+            HousingCollector.ObserveEstateAddonDetail(trigger.AddonName, trigger.AddonDetail);
+        string closeCollectorFailure = string.Empty;
 
         // Read addon text at close time — data is fully populated by now.
         // Must use the event's addon pointer directly; GetAddonByName returns null at PreFinalize.
         try
         {
-            switch (category)
+            switch (trigger.Category)
             {
-                case "FC Members" when addonName == "FreeCompany":
+                case "FC Members" when trigger.AddonName == "FreeCompany":
                     Plugin.Log.Information("[XA] FreeCompany closing — reading FC points via pointer.");
-                    FreeCompanyCollector.CollectFromAddon(addonPtr);
+                    FreeCompanyCollector.CollectFromAddon(trigger.AddonPtr);
                     break;
 
-                case "Estate" when addonName == "HousingSignBoard":
+                case "Estate" when trigger.AddonName == "HousingSignBoard":
                     Plugin.Log.Information("[XA] HousingSignBoard closing — reading housing info via pointer.");
-                    FreeCompanyCollector.CollectEstateFromAddon(addonPtr);
+                    HousingCollector.CollectFromAddon(trigger.AddonPtr);
                     break;
             }
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] Addon close collect error ({category}/{addonName}): {ex}");
+            Plugin.Log.Error($"[XA] Addon close collect error ({trigger.Category}/{trigger.AddonName}): {ex}");
+            closeCollectorFailure = $"Addon watcher failed to collect data while closing {trigger.AddonName}.";
         }
 
         if (!plugin.Configuration.AddonWatcherEnabled)
             return;
 
-        AddTaskLog($"[XA.DB TASK] Addon close trigger: {category} / {addonName}");
-        Plugin.Log.Information($"[XA] Addon trigger ({category}) — refreshing and saving.");
-        RefreshAndSave(SnapshotTrigger.AddonWatcher, $"{category}:{addonName}");
+        if (!string.IsNullOrWhiteSpace(closeCollectorFailure))
+            QueueCollectorWarning(closeCollectorFailure);
+
+        AddTaskLog($"[XA.DB TASK] Addon close trigger: {trigger.Category} / {trigger.AddonName}");
+        Plugin.Log.Information($"[XA] Addon trigger ({trigger.Category}) — refreshing and saving.");
+        RefreshAndSave(SnapshotTrigger.AddonWatcher, trigger.TriggerDetail);
     }
 
     public SaveSnapshotResult SaveToDatabase(SnapshotTrigger trigger = SnapshotTrigger.Manual, string triggerDetail = "Manual save")
@@ -474,7 +572,9 @@ public partial class MainWindow : Window, IDisposable
         if (!playerState.IsLoaded || !DataCollected)
         {
             fallbackResult.Summary = "Snapshot save skipped because live data is not ready.";
+            fallbackResult.Quality = GetSnapshotQualityLabel(fallbackResult);
             lastSnapshotResult = fallbackResult;
+            AddSaveHistoryEntry(fallbackResult);
             return fallbackResult;
         }
 
@@ -482,7 +582,9 @@ public partial class MainWindow : Window, IDisposable
         {
             fallbackResult.Summary = "Snapshot save skipped because a stored character view is active.";
             fallbackResult.Warnings.Add("Switch back to Current Character (Live) before saving.");
+            fallbackResult.Quality = GetSnapshotQualityLabel(fallbackResult);
             lastSnapshotResult = fallbackResult;
+            AddSaveHistoryEntry(fallbackResult);
             return fallbackResult;
         }
 
@@ -494,9 +596,28 @@ public partial class MainWindow : Window, IDisposable
             var localPlayer = Plugin.ObjectTable.LocalPlayer;
             var (world, datacenter, region) = ResolveStableWorldAndDatacenter(contentId);
             var isOnHomeworld = localPlayer == null || localPlayer.CurrentWorld.RowId == localPlayer.HomeWorld.RowId;
-            if (isOnHomeworld && cachedFc == null)
+            var hasReliableLiveCharacterContext = localPlayer != null
+                && !Plugin.Condition[ConditionFlag.BetweenAreas]
+                && !Plugin.Condition[ConditionFlag.BetweenAreas51];
+            var persistedSnapshot = plugin.SnapshotRepo.GetSnapshot(contentId);
+            if (string.IsNullOrEmpty(cachedPersonalEstate) && !hasReliableLiveCharacterContext && persistedSnapshot != null)
+                cachedPersonalEstate = persistedSnapshot.Row.PersonalEstate;
+            if (string.IsNullOrEmpty(cachedSharedEstates) && persistedSnapshot != null)
+                cachedSharedEstates = persistedSnapshot.Row.SharedEstates;
+            if (string.IsNullOrEmpty(cachedApartment) && !hasReliableLiveCharacterContext && persistedSnapshot != null)
+                cachedApartment = persistedSnapshot.Row.Apartment;
+            if (persistedSnapshot != null)
+                cachedPersonalEstate = XaCharacterSnapshotRepository.PreferSizedPersonalEstateValue(cachedPersonalEstate, persistedSnapshot.Row.PersonalEstate);
+            if (cachedFc == null && persistedSnapshot?.FreeCompany != null && (!isOnHomeworld || !hasReliableLiveCharacterContext))
+                cachedFc = persistedSnapshot.FreeCompany;
+            if (cachedFc != null && cachedFcMembers.Count == 0 && persistedSnapshot != null && persistedSnapshot.FcMembers.Count > 0)
+                cachedFcMembers = persistedSnapshot.FcMembers;
+            if (isOnHomeworld && cachedFc == null && hasReliableLiveCharacterContext)
                 ClearPersistedFreeCompanyState();
+            ApplyPersistedSaddlebagState(persistedSnapshot, IsSaddlebagClearConfirmed(trigger));
+            ApplyPersistedSaddlebagInventorySummaries(persistedSnapshot, IsSaddlebagClearConfirmed(trigger));
             var validation = BuildValidationSummary(isOnHomeworld);
+            AppendWarnings(validation.Warnings, ConsumePendingCollectorWarnings());
             var validationJson = JsonSerializer.Serialize(validation);
             var freshnessJson = JsonSerializer.Serialize(new
             {
@@ -507,6 +628,7 @@ public partial class MainWindow : Window, IDisposable
                 dataCollected = DataCollected,
                 viewingStoredCharacter = viewingContentId.HasValue
             });
+            MergeActiveRetainerListings();
             MergeActiveRetainerInventory();
             NormalizeCachedRetainerState();
             var retainerGil = GetRetainerGil();
@@ -518,6 +640,7 @@ public partial class MainWindow : Window, IDisposable
                 datacenter,
                 region,
                 cachedPersonalEstate,
+                cachedSharedEstates,
                 cachedApartment,
                 gil,
                 retainerGil,
@@ -536,6 +659,7 @@ public partial class MainWindow : Window, IDisposable
                 cachedQuests,
                 cachedMsqMilestones,
                 validationJson);
+            var normalizedRetainers = XaCharacterSnapshotRepository.NormalizeRetainerPayload(cachedRetainers, cachedListings, cachedRetainerItems);
 
             plugin.DatabaseService.BeginTransaction();
             try
@@ -552,12 +676,13 @@ public partial class MainWindow : Window, IDisposable
                     cachedFc?.FcPoints ?? 0,
                     cachedFc?.Estate ?? string.Empty,
                     cachedPersonalEstate,
+                    cachedSharedEstates,
                     cachedApartment,
                     gil,
                     retainerGil,
-                    cachedRetainers.Count,
+                    normalizedRetainers.Retainers.Count,
                     XaCharacterSnapshotRepository.GetHighestJobLevel(cachedJobs),
-                    JsonSerializer.Serialize(cachedRetainers.Select(r => r.RetainerId).Distinct()),
+                    JsonSerializer.Serialize(normalizedRetainers.Retainers.Select(r => r.RetainerId).Distinct()),
                     freshnessJson,
                     sections,
                     1,
@@ -566,7 +691,6 @@ public partial class MainWindow : Window, IDisposable
                     triggerDetail,
                     false,
                     savedAtUtc);
-
                 plugin.DatabaseService.CommitTransaction();
             }
             catch
@@ -577,9 +701,10 @@ public partial class MainWindow : Window, IDisposable
 
             // Refresh known characters list (after commit)
             knownCharacters = plugin.CharacterRepo.GetAll();
-            var persistedSnapshot = plugin.SnapshotRepo.GetSnapshot(contentId);
-            if (persistedSnapshot != null)
-                ApplySnapshotToCache(persistedSnapshot);
+            InvalidateDashboardSnapshotCache();
+            var savedSnapshot = plugin.SnapshotRepo.GetSnapshot(contentId);
+            if (savedSnapshot != null)
+                ApplySnapshotToCache(savedSnapshot);
 
             var result = new SaveSnapshotResult
             {
@@ -596,13 +721,16 @@ public partial class MainWindow : Window, IDisposable
                 SavedFreeCompany = cachedFc != null,
                 SavedVoyages = cachedVoyages != null,
                 Summary = $"Saved snapshot for {name} @ {world}",
-                Warnings = validation.Warnings
+                Warnings = validation.Warnings,
+                Quality = string.Empty
             };
+            result.Quality = GetSnapshotQualityLabel(result);
             lastSnapshotResult = result;
             RefreshMigrationState();
 
             Plugin.Log.Information($"[XA] Saved snapshot for {name} @ {world} to database.");
-            AddTaskLog($"[XA.DB TASK] Saved snapshot for {name} @ {world} via {trigger}.");
+            AddTaskLog($"[XA.DB TASK] Saved snapshot for {name} @ {world} via {trigger} ({result.Quality}).");
+            AddSaveHistoryEntry(result);
 
             // Echo notification in chat if enabled
             if (plugin.Configuration.EchoOnSave)
@@ -630,17 +758,20 @@ public partial class MainWindow : Window, IDisposable
                 TriggerDetail = triggerDetail,
                 SavedAtUtc = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"),
                 Summary = $"Snapshot save failed: {ex.Message}",
-                Warnings = new List<string> { ex.Message }
+                Warnings = new List<string> { ex.Message },
+                Quality = string.Empty
             };
+            result.Quality = GetSnapshotQualityLabel(result);
             lastSnapshotResult = result;
             AddTaskLog($"[XA.DB TASK] Save failed: {ex.Message}");
+            AddSaveHistoryEntry(result);
             return result;
         }
     }
 
     private CollectorValidationSummary BuildValidationSummary(bool isOnHomeworld)
     {
-        var summary = new CollectorValidationSummary
+        return new CollectorValidationSummary
         {
             InventoryCollected = cachedInventory.Count > 0 || cachedItems.Count > 0,
             RetainersCollected = cachedRetainers.Count > 0,
@@ -649,17 +780,6 @@ public partial class MainWindow : Window, IDisposable
             CollectionsCollected = cachedCollections.Count > 0,
             QuestsCollected = cachedQuests.Count > 0 || cachedMsqMilestones.Count > 0,
         };
-
-        if (!isOnHomeworld)
-            summary.Warnings.Add("Free Company data skipped because player was not on home world.");
-        if (cachedRetainers.Count == 0)
-            summary.Warnings.Add("Retainer data unavailable in the current snapshot.");
-        if (cachedVoyages == null)
-            summary.Warnings.Add("Voyage data unavailable because the workshop was not opened during this session.");
-        if (cachedPersonalEstate.Length == 0 && cachedApartment.Length == 0)
-            summary.Warnings.Add("No personal housing data is currently stored for this character.");
-
-        return summary;
     }
 
     private string BuildCharacterSnapshotJson(
@@ -686,6 +806,7 @@ public partial class MainWindow : Window, IDisposable
                 world,
                 datacenter,
                 personalEstate = cachedPersonalEstate,
+                sharedEstates = cachedSharedEstates,
                 apartment = cachedApartment,
                 gil = GetGil(),
                 retainerGil = GetRetainerGil(),
@@ -790,6 +911,7 @@ public partial class MainWindow : Window, IDisposable
                         resolvedDatacenter,
                         resolvedRegion,
                         character.PersonalEstate,
+                        character.SharedEstates,
                         character.Apartment,
                         safeGil,
                         safeRetainerGil,
@@ -822,6 +944,7 @@ public partial class MainWindow : Window, IDisposable
                         fc?.FcPoints ?? 0,
                         fc?.Estate ?? string.Empty,
                         character.PersonalEstate,
+                        character.SharedEstates,
                         character.Apartment,
                         safeGil,
                         safeRetainerGil,
@@ -852,6 +975,7 @@ public partial class MainWindow : Window, IDisposable
                 throw;
             }
             knownCharacters = plugin.CharacterRepo.GetAll();
+            InvalidateDashboardSnapshotCache();
             charListQueried = true;
             RefreshMigrationState();
             SetMigrationStatus($"Imported {characters.Count} legacy characters into xa_characters and removed legacy tables.");
@@ -871,6 +995,7 @@ public partial class MainWindow : Window, IDisposable
         {
             plugin.DatabaseService.ClearAllCharacterData();
             knownCharacters.Clear();
+            InvalidateDashboardSnapshotCache();
             charListQueried = false;
             itemSearchResults.Clear();
             cachedCurrencies.Clear();
@@ -888,12 +1013,17 @@ public partial class MainWindow : Window, IDisposable
             cachedQuests.Clear();
             cachedMsqMilestones.Clear();
             cachedPersonalEstate = string.Empty;
+            cachedSharedEstates = string.Empty;
             cachedApartment = string.Empty;
             DataCollected = false;
             viewingContentId = null;
             selectedCharacterIndex = -1;
             viewingCharName = string.Empty;
             lastSnapshotResult = null;
+            saveHistoryEntries.Clear();
+            pendingCollectorWarnings.Clear();
+            lastAddonTrigger = null;
+            HousingCollector.ResetPersonalHousingState();
             RefreshMigrationState();
             SetMigrationStatus("All XA Database tables were cleared. Start fresh by using Refresh + Save.");
             AddTaskLog("[XA.DB TASK] Cleared all XA Database tables.");
@@ -992,6 +1122,7 @@ public partial class MainWindow : Window, IDisposable
         charSelectorSearch = string.Empty;
         SeedFromDatabase();
         knownCharacters = plugin.CharacterRepo.GetAll();
+        InvalidateDashboardSnapshotCache();
         RefreshAndSave(SnapshotTrigger.Login, "Initial load");
     }
 
@@ -1005,6 +1136,7 @@ public partial class MainWindow : Window, IDisposable
         {
             charListQueried = true;
             knownCharacters = plugin.CharacterRepo.GetAll();
+            InvalidateDashboardSnapshotCache();
         }
 
         // Refresh button (only when logged in)
@@ -1088,6 +1220,8 @@ public partial class MainWindow : Window, IDisposable
             }
         }
 
+        DrawLatestSnapshotStatusPanel();
+
         // Reserve space for the sticky footer status bar
         var footerHeight = ImGui.GetFrameHeightWithSpacing() + 4;
         var contentHeight = ImGui.GetContentRegionAvail().Y - footerHeight;
@@ -1170,6 +1304,17 @@ public partial class MainWindow : Window, IDisposable
             ImGui.TextDisabled("|");
             ImGui.SameLine();
             ImGui.TextDisabled(lastSnapshotResult.Success ? lastSnapshotResult.Trigger.ToString() : "Save failed");
+            ImGui.SameLine();
+            ImGui.TextDisabled("|");
+            ImGui.SameLine();
+            ImGui.TextColored(GetSnapshotQualityColor(lastSnapshotResult), GetSnapshotQualityLabel(lastSnapshotResult));
+            if (lastSnapshotResult.Warnings.Count > 0)
+            {
+                ImGui.SameLine();
+                ImGui.TextDisabled("|");
+                ImGui.SameLine();
+                ImGui.TextDisabled($"Warnings: {lastSnapshotResult.Warnings.Count}");
+            }
         }
     }
 }
@@ -1187,6 +1332,7 @@ public enum SnapshotTrigger
 
 public sealed class SaveSnapshotResult
 {
+    public int PayloadVersion { get; init; } = IpcContractInfo.LastSnapshotResultJsonVersion;
     public bool Success { get; init; }
     public ulong ContentId { get; init; }
     public string CharacterName { get; init; } = string.Empty;
@@ -1200,6 +1346,7 @@ public sealed class SaveSnapshotResult
     public bool SavedFreeCompany { get; init; }
     public bool SavedVoyages { get; init; }
     public string Summary { get; set; } = string.Empty;
+    public string Quality { get; set; } = string.Empty;
     public List<string> Warnings { get; init; } = new();
 }
 

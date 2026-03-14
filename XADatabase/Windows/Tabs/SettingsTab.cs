@@ -40,6 +40,8 @@ public partial class MainWindow
         ImGui.Text("Database");
         var dbPath = plugin.DatabaseService.GetDbPath();
         ImGui.TextDisabled(dbPath);
+        ImGui.Spacing();
+        DrawDatabaseHealthSection();
 
         ImGui.Spacing();
         ImGui.Separator();
@@ -175,33 +177,24 @@ public partial class MainWindow
         ImGui.Spacing();
         if (ImGui.TreeNode("Tracked Addons"))
         {
-            // Persistent groups
-            foreach (var (category, addons) in AddonWatcher.GetPersistentGroups())
+            var trackedGroups = BuildTrackedAddonDisplayGroups();
+            var trackedColumnCount = GetTrackedAddonColumnCount(ImGui.GetContentRegionAvail().X);
+            var trackedColumns = BuildTrackedAddonColumns(trackedGroups, trackedColumnCount);
+
+            using var trackedTable = ImRaii.Table("TrackedAddonsColumns", trackedColumnCount, ImGuiTableFlags.SizingStretchSame);
+            if (trackedTable.Success)
             {
-                ImGui.TextDisabled($"{category}:");
-                foreach (var a in addons)
+                for (var columnIndex = 0; columnIndex < trackedColumns.Count; columnIndex++)
                 {
-                    var isOpen = openAddons.Contains(a);
-                    if (isOpen)
-                        ImGui.TextDisabled($"    {a} (loaded)");
-                    else
-                        ImGui.TextDisabled($"    {a}");
+                    ImGui.TableNextColumn();
+                    foreach (var group in trackedColumns[columnIndex])
+                    {
+                        DrawTrackedAddonGroup(group, openAddons);
+                        ImGui.Spacing();
+                    }
                 }
             }
 
-            // Transient groups
-            foreach (var (category, addons) in AddonWatcher.GetTransientGroups())
-            {
-                ImGui.Text($"{category}:");
-                foreach (var a in addons)
-                {
-                    var isOpen = openAddons.Contains(a);
-                    if (isOpen)
-                        ImGui.TextColored(new Vector4(0.4f, 1.0f, 0.4f, 1.0f), $"    {a} (open)");
-                    else
-                        ImGui.TextDisabled($"    {a}");
-                }
-            }
             ImGui.TreePop();
         }
 
@@ -352,6 +345,12 @@ public partial class MainWindow
         ImGui.Separator();
         ImGui.Spacing();
 
+        DrawSaveHistorySection();
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
         ImGui.TextDisabled($"XA Database v{PluginVersion}");
         ImGui.TextDisabled("https://github.com/xa-io");
     }
@@ -361,5 +360,83 @@ public partial class MainWindow
         exportStatusMessage = message;
         exportStatusExpiry = DateTime.UtcNow.AddSeconds(8);
     }
+
+    private static List<TrackedAddonDisplayGroup> BuildTrackedAddonDisplayGroups()
+    {
+        var groups = new List<TrackedAddonDisplayGroup>();
+
+        foreach (var (category, addons) in AddonWatcher.GetPersistentGroups())
+            groups.Add(new TrackedAddonDisplayGroup(category, addons, true));
+
+        foreach (var (category, addons) in AddonWatcher.GetTransientGroups())
+            groups.Add(new TrackedAddonDisplayGroup(category, addons, false));
+
+        return groups;
+    }
+
+    private static int GetTrackedAddonColumnCount(float availableWidth)
+    {
+        if (availableWidth >= 900f)
+            return 3;
+
+        if (availableWidth >= 560f)
+            return 2;
+
+        return 1;
+    }
+
+    private static List<List<TrackedAddonDisplayGroup>> BuildTrackedAddonColumns(List<TrackedAddonDisplayGroup> groups, int columnCount)
+    {
+        var safeColumnCount = Math.Max(1, Math.Min(columnCount, groups.Count));
+        var columns = new List<List<TrackedAddonDisplayGroup>>(safeColumnCount);
+        var columnHeights = new int[safeColumnCount];
+
+        for (var i = 0; i < safeColumnCount; i++)
+            columns.Add(new List<TrackedAddonDisplayGroup>());
+
+        foreach (var group in groups)
+        {
+            var targetColumn = 0;
+            for (var i = 1; i < safeColumnCount; i++)
+            {
+                if (columnHeights[i] < columnHeights[targetColumn])
+                    targetColumn = i;
+            }
+
+            columns[targetColumn].Add(group);
+            columnHeights[targetColumn] += group.Addons.Length + 2;
+        }
+
+        return columns;
+    }
+
+    private static void DrawTrackedAddonGroup(TrackedAddonDisplayGroup group, IReadOnlyCollection<string> openAddons)
+    {
+        if (group.IsPersistent)
+            ImGui.TextDisabled($"{group.Category}:");
+        else
+            ImGui.Text($"{group.Category}:");
+
+        foreach (var addon in group.Addons)
+        {
+            var isOpen = openAddons.Contains(addon);
+            if (group.IsPersistent)
+            {
+                if (isOpen)
+                    ImGui.TextDisabled($"    {addon} (loaded)");
+                else
+                    ImGui.TextDisabled($"    {addon}");
+            }
+            else
+            {
+                if (isOpen)
+                    ImGui.TextColored(new Vector4(0.4f, 1.0f, 0.4f, 1.0f), $"    {addon} (open)");
+                else
+                    ImGui.TextDisabled($"    {addon}");
+            }
+        }
+    }
+
+    private sealed record TrackedAddonDisplayGroup(string Category, string[] Addons, bool IsPersistent);
 
 }

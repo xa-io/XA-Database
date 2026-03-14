@@ -40,6 +40,7 @@ public class CharacterRepository
     public void SavePersonalHousing(ulong contentId, string personalEstate, string apartment)
     {
         var conn = db.GetConnection();
+        var normalizedHousing = XaCharacterSnapshotRepository.NormalizeHousingPayload(personalEstate, string.Empty, apartment);
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
             UPDATE xa_characters SET
@@ -47,26 +48,28 @@ public class CharacterRepository
                 apartment = @apt
             WHERE content_id = @cid";
         cmd.Parameters.AddWithValue("@cid", (long)contentId);
-        cmd.Parameters.AddWithValue("@pe", personalEstate);
-        cmd.Parameters.AddWithValue("@apt", apartment);
+        cmd.Parameters.AddWithValue("@pe", normalizedHousing.PersonalEstate);
+        cmd.Parameters.AddWithValue("@apt", normalizedHousing.Apartment);
         cmd.ExecuteNonQuery();
     }
 
-    public (string PersonalEstate, string Apartment) GetPersonalHousing(ulong contentId)
+    public (string PersonalEstate, string SharedEstates, string Apartment) GetPersonalHousing(ulong contentId)
     {
         var conn = db.GetConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT personal_estate, apartment FROM xa_characters WHERE content_id = @cid LIMIT 1";
+        cmd.CommandText = "SELECT personal_estate, shared_estates, apartment FROM xa_characters WHERE content_id = @cid LIMIT 1";
         cmd.Parameters.AddWithValue("@cid", (long)contentId);
         using var reader = cmd.ExecuteReader();
         if (reader.Read())
         {
-            return (
+            var normalizedHousing = XaCharacterSnapshotRepository.NormalizeHousingPayload(
                 reader["personal_estate"].ToString() ?? "",
+                reader["shared_estates"].ToString() ?? "",
                 reader["apartment"].ToString() ?? ""
             );
+            return normalizedHousing;
         }
-        return ("", "");
+        return ("", "", "");
     }
 
     public CharacterRow? Get(ulong contentId)
@@ -74,7 +77,7 @@ public class CharacterRepository
         var conn = db.GetConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
-            SELECT content_id, character_name, world, datacenter, region, updated_utc, exported_utc, personal_estate, apartment
+            SELECT content_id, character_name, world, datacenter, region, updated_utc, exported_utc, personal_estate, shared_estates, apartment
             FROM xa_characters
             WHERE content_id = @cid
             LIMIT 1";
@@ -82,6 +85,11 @@ public class CharacterRepository
         using var reader = cmd.ExecuteReader();
         if (!reader.Read())
             return null;
+
+        var normalizedHousing = XaCharacterSnapshotRepository.NormalizeHousingPayload(
+            reader["personal_estate"].ToString() ?? "",
+            reader["shared_estates"].ToString() ?? "",
+            reader["apartment"].ToString() ?? "");
 
         return new CharacterRow
         {
@@ -92,8 +100,9 @@ public class CharacterRepository
             Region = WorldData.ResolveRegion(reader["world"].ToString() ?? "", reader["region"].ToString() ?? ""),
             LastSeenUtc = reader["updated_utc"].ToString() ?? "",
             CreatedUtc = reader["exported_utc"].ToString() ?? "",
-            PersonalEstate = reader["personal_estate"].ToString() ?? "",
-            Apartment = reader["apartment"].ToString() ?? "",
+            PersonalEstate = normalizedHousing.PersonalEstate,
+            SharedEstates = normalizedHousing.SharedEstates,
+            Apartment = normalizedHousing.Apartment,
         };
     }
 
@@ -112,6 +121,10 @@ public class CharacterRepository
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
+            var normalizedHousing = XaCharacterSnapshotRepository.NormalizeHousingPayload(
+                reader["personal_estate"].ToString() ?? "",
+                string.Empty,
+                reader["apartment"].ToString() ?? "");
             results.Add(new CharacterRow
             {
                 ContentId = (ulong)(long)reader["content_id"],
@@ -121,8 +134,8 @@ public class CharacterRepository
                 Region = WorldData.ResolveRegion(reader["world"].ToString() ?? ""),
                 LastSeenUtc = reader["last_seen_utc"].ToString() ?? "",
                 CreatedUtc = reader["created_utc"].ToString() ?? "",
-                PersonalEstate = reader["personal_estate"].ToString() ?? "",
-                Apartment = reader["apartment"].ToString() ?? "",
+                PersonalEstate = normalizedHousing.PersonalEstate,
+                Apartment = normalizedHousing.Apartment,
             });
         }
 
@@ -137,7 +150,7 @@ public class CharacterRepository
     {
         var conn = db.GetConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "UPDATE xa_characters SET personal_estate = '', apartment = '' WHERE personal_estate != '' OR apartment != ''";
+        cmd.CommandText = "UPDATE xa_characters SET personal_estate = '', shared_estates = '', apartment = '' WHERE personal_estate != '' OR shared_estates != '' OR apartment != ''";
         return cmd.ExecuteNonQuery();
     }
 
@@ -147,12 +160,16 @@ public class CharacterRepository
         var conn = db.GetConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
-            SELECT content_id, character_name, world, datacenter, region, updated_utc, exported_utc, personal_estate, apartment
+            SELECT content_id, character_name, world, datacenter, region, updated_utc, exported_utc, personal_estate, shared_estates, apartment
             FROM xa_characters
             ORDER BY updated_utc DESC, character_name ASC";
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
+            var normalizedHousing = XaCharacterSnapshotRepository.NormalizeHousingPayload(
+                reader["personal_estate"].ToString() ?? "",
+                reader["shared_estates"].ToString() ?? "",
+                reader["apartment"].ToString() ?? "");
             results.Add(new CharacterRow
             {
                 ContentId = (ulong)(long)reader["content_id"],
@@ -162,8 +179,9 @@ public class CharacterRepository
                 Region = WorldData.ResolveRegion(reader["world"].ToString() ?? "", reader["region"].ToString() ?? ""),
                 LastSeenUtc = reader["updated_utc"].ToString() ?? "",
                 CreatedUtc = reader["exported_utc"].ToString() ?? "",
-                PersonalEstate = reader["personal_estate"].ToString() ?? "",
-                Apartment = reader["apartment"].ToString() ?? "",
+                PersonalEstate = normalizedHousing.PersonalEstate,
+                SharedEstates = normalizedHousing.SharedEstates,
+                Apartment = normalizedHousing.Apartment,
             });
         }
         return results;
@@ -180,5 +198,6 @@ public class CharacterRow
     public string LastSeenUtc { get; set; } = string.Empty;
     public string CreatedUtc { get; set; } = string.Empty;
     public string PersonalEstate { get; set; } = string.Empty;
+    public string SharedEstates { get; set; } = string.Empty;
     public string Apartment { get; set; } = string.Empty;
 }

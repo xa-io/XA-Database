@@ -35,6 +35,7 @@ public partial class MainWindow
         ImGui.TextColored(new Vector4(0.4f, 0.8f, 1.0f, 1.0f), "IPC Calls Available");
         ImGui.TextDisabled("Other plugins can call these IPC channels to interact with XA Database.");
         ImGui.TextDisabled("All channels use the \"XA.Database.\" prefix.");
+        ImGui.TextDisabled($"IPC contract v{IpcContractInfo.CurrentVersion} — structured JSON payloads include their own version fields.");
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
@@ -70,7 +71,7 @@ public partial class MainWindow
             ImGui.TableHeadersRow();
 
             DrawIpcRow("XA.Database.IsReady", "bool", "True when player is loaded");
-            DrawIpcRow("XA.Database.GetVersion", "string", "Plugin version (e.g. \"0.0.0.21\")");
+            DrawIpcRow("XA.Database.GetVersion", "string", $"Plugin version (e.g. \"{PluginVersion}\")");
             DrawIpcRow("XA.Database.GetDbPath", "string", "Absolute path to xa.db");
             DrawIpcRow("XA.Database.GetCharacterName", "string", "Current character name");
             DrawIpcRow("XA.Database.GetGil", "int", "Current character's gil");
@@ -102,7 +103,7 @@ public partial class MainWindow
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
-        ImGui.TextDisabled($"XA Database v{PluginVersion} — {18} IPC channels registered");
+        ImGui.TextDisabled($"XA Database v{PluginVersion} — {IpcContractInfo.ChannelCount} IPC channels registered");
     }
 
     private static void DrawIpcRow(string channel, string type, string description)

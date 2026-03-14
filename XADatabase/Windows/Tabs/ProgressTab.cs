@@ -187,7 +187,7 @@ public partial class MainWindow
     private struct DashRow
     {
         public string Name, World, Server, Region, FcName, LastSeen;
-        public long Gil, MarketValue;
+        public long Gil, RetainerGil, MarketValue;
         public int Retainers, Listings, VenturesReady;
         public ulong ContentId;
         public Dictionary<string, int> JobLevels;
@@ -206,8 +206,15 @@ public partial class MainWindow
 
     private struct CollRow
     {
-        public string Name;
+        public string Location, Name;
         public int MountsU, MountsT, MinionsU, MinionsT, OrchU, OrchT, TtU, TtT;
+    }
+
+    private struct MsqRow
+    {
+        public string Location, Name;
+        public int Completed, Total;
+        public float Percent;
     }
 
     private bool HasAutoRetainer()

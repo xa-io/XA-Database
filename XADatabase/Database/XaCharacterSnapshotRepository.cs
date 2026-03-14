@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using XADatabase.Data;
@@ -16,6 +17,12 @@ public sealed class XaCharacterSnapshotRepository
     {
         PropertyNameCaseInsensitive = true,
     };
+    private static readonly Regex PlotNumberRegex = new(@"\bPlot\s+(?<plot>\d+)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex WardNumberRegex = new(@"\b(?:Ward\s+(?<wardAfter>\d+)|(?<wardBefore>\d+)(?:st|nd|rd|th)\s+Ward)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex RoomNumberRegex = new(@"\bRoom\s+#?(?<room>\d+)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex ParentheticalTextRegex = new(@"\s*\([^)]*\)", RegexOptions.Compiled);
+    private static readonly Regex OwnerSuffixRegex = new(@"\s*\[[^\]]+\]\s*$", RegexOptions.Compiled);
+    private static readonly Regex WhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
 
     public XaCharacterSnapshotRepository(DatabaseService db)
     {
@@ -27,7 +34,7 @@ public sealed class XaCharacterSnapshotRepository
         var conn = db.GetConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
-            SELECT content_id, character_name, world, datacenter, region, updated_utc, exported_utc, personal_estate, apartment
+            SELECT content_id, character_name, world, datacenter, region, updated_utc, exported_utc, personal_estate, shared_estates, apartment
             FROM xa_characters
             WHERE content_id = @cid
             LIMIT 1";
@@ -35,6 +42,11 @@ public sealed class XaCharacterSnapshotRepository
         using var reader = cmd.ExecuteReader();
         if (!reader.Read())
             return null;
+
+        var normalizedHousing = NormalizeHousingPayload(
+            reader["personal_estate"].ToString() ?? string.Empty,
+            reader["shared_estates"].ToString() ?? string.Empty,
+            reader["apartment"].ToString() ?? string.Empty);
 
         return new CharacterRow
         {
@@ -45,8 +57,9 @@ public sealed class XaCharacterSnapshotRepository
             Region = ResolveRegion(reader["world"].ToString() ?? string.Empty, reader["region"].ToString() ?? string.Empty),
             LastSeenUtc = reader["updated_utc"].ToString() ?? string.Empty,
             CreatedUtc = reader["exported_utc"].ToString() ?? string.Empty,
-            PersonalEstate = reader["personal_estate"].ToString() ?? string.Empty,
-            Apartment = reader["apartment"].ToString() ?? string.Empty,
+            PersonalEstate = normalizedHousing.PersonalEstate,
+            SharedEstates = normalizedHousing.SharedEstates,
+            Apartment = normalizedHousing.Apartment,
         };
     }
 
@@ -89,6 +102,7 @@ public sealed class XaCharacterSnapshotRepository
         string datacenter,
         string region,
         string personalEstate,
+        string sharedEstates,
         string apartment,
         int gil,
         int retainerGil,
@@ -114,6 +128,7 @@ public sealed class XaCharacterSnapshotRepository
         var normalizedJobs = NormalizeJobs(jobs);
         var normalizedRetainers = NormalizeRetainerPayload(retainers, listings, retainerItems);
         var itemSections = BuildItemSections(items);
+        var normalizedHousing = NormalizeHousingPayload(personalEstate, sharedEstates, apartment);
 
         return new XaCharacterSnapshotSections
         {
@@ -125,8 +140,9 @@ public sealed class XaCharacterSnapshotRepository
                 world = resolvedWorld,
                 datacenter = resolvedDatacenter,
                 region = resolvedRegion,
-                personalEstate = personalEstate ?? string.Empty,
-                apartment = apartment ?? string.Empty,
+                personalEstate = normalizedHousing.PersonalEstate,
+                sharedEstates = normalizedHousing.SharedEstates,
+                apartment = normalizedHousing.Apartment,
                 gil,
                 retainerGil,
             }, "{}"),
@@ -160,11 +176,14 @@ public sealed class XaCharacterSnapshotRepository
         string datacenter,
         string region,
         string personalEstate,
+        string sharedEstates,
         string apartment,
         int gil,
         int retainerGil,
         string validationJson)
     {
+        var normalizedHousing = NormalizeHousingPayload(personalEstate, sharedEstates, apartment);
+
         if (string.IsNullOrWhiteSpace(snapshotJson))
         {
             return new XaCharacterSnapshotSections
@@ -176,8 +195,9 @@ public sealed class XaCharacterSnapshotRepository
                     world = world ?? string.Empty,
                     datacenter = ResolveDatacenter(world ?? string.Empty, datacenter ?? string.Empty),
                     region = ResolveRegion(world ?? string.Empty, region ?? string.Empty),
-                    personalEstate = personalEstate ?? string.Empty,
-                    apartment = apartment ?? string.Empty,
+                    personalEstate = normalizedHousing.PersonalEstate,
+                    sharedEstates = normalizedHousing.SharedEstates,
+                    apartment = normalizedHousing.Apartment,
                     gil,
                     retainerGil,
                 }, "{}"),
@@ -190,7 +210,7 @@ public sealed class XaCharacterSnapshotRepository
             using var doc = JsonDocument.Parse(snapshotJson);
             var root = doc.RootElement;
 
-            var characterSection = BuildCharacterSection(root, contentId, characterName, world, datacenter, region, personalEstate, apartment, gil, retainerGil);
+            var characterSection = BuildCharacterSection(root, contentId, characterName, world, datacenter, region, normalizedHousing.PersonalEstate, normalizedHousing.SharedEstates, normalizedHousing.Apartment, gil, retainerGil);
             var inventorySummaries = DeserializeList<InventorySummary>(GetRawProperty(root, "inventory", "[]"));
             var items = DeserializeList<ContainerItemEntry>(GetRawProperty(root, "items", "[]"));
             var jobs = NormalizeJobs(DeserializeList<JobEntry>(GetRawProperty(root, "jobs", "[]")));
@@ -237,8 +257,9 @@ public sealed class XaCharacterSnapshotRepository
                     world = world ?? string.Empty,
                     datacenter = ResolveDatacenter(world ?? string.Empty, datacenter ?? string.Empty),
                     region = ResolveRegion(world ?? string.Empty, region ?? string.Empty),
-                    personalEstate = personalEstate ?? string.Empty,
-                    apartment = apartment ?? string.Empty,
+                    personalEstate = normalizedHousing.PersonalEstate,
+                    sharedEstates = normalizedHousing.SharedEstates,
+                    apartment = normalizedHousing.Apartment,
                     gil,
                     retainerGil,
                 }, "{}"),
@@ -255,6 +276,86 @@ public sealed class XaCharacterSnapshotRepository
     public static string ResolveRegion(string world, string fallbackRegion = "")
     {
         return WorldData.ResolveRegion(world, fallbackRegion);
+    }
+
+    public static (string PersonalEstate, string SharedEstates, string Apartment) NormalizeHousingPayload(
+        string personalEstate,
+        string sharedEstates,
+        string apartment)
+    {
+        var normalizedPersonalEstate = NormalizeHousingDisplayValue(personalEstate);
+        var normalizedApartment = NormalizeApartmentDisplayValue(apartment);
+        var cleanedSharedEntries = new List<string>();
+        var seenComparisonKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenDisplayValues = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var entry in SplitHousingEntries(sharedEstates))
+        {
+            if (AddressesMatch(normalizedPersonalEstate, entry))
+                continue;
+
+            var comparisonKey = BuildHousingComparisonKey(entry);
+            if (comparisonKey.Length > 0)
+            {
+                if (!seenComparisonKeys.Add(comparisonKey))
+                    continue;
+            }
+            else
+            {
+                var displayKey = NormalizeHousingTextForComparison(entry);
+                if (!seenDisplayValues.Add(displayKey))
+                    continue;
+            }
+
+            cleanedSharedEntries.Add(entry);
+        }
+
+        return (normalizedPersonalEstate, string.Join("\n", cleanedSharedEntries), normalizedApartment);
+    }
+
+    public static string NormalizeApartmentDisplayValue(string value)
+    {
+        var normalizedValue = StripHousingOwnerSuffix(NormalizeHousingDisplayValue(value));
+        if (normalizedValue.Length == 0)
+            return string.Empty;
+
+        var roomNumber = ExtractNumber(RoomNumberRegex, normalizedValue, "room");
+        var wardNumber = ExtractWardNumber(normalizedValue);
+        var districtName = ExtractDistrictDisplayName(normalizedValue);
+        if (roomNumber > 0 && wardNumber > 0 && districtName.Length > 0)
+            return $"Room {roomNumber}, Ward {wardNumber}, {districtName}";
+
+        return normalizedValue;
+    }
+
+    public static string PreferSizedPersonalEstateValue(string currentValue, string persistedValue)
+    {
+        var normalizedCurrent = StripHousingOwnerSuffix(currentValue);
+        var normalizedPersisted = StripHousingOwnerSuffix(persistedValue);
+        if (normalizedCurrent.Length == 0)
+            return normalizedPersisted;
+        if (normalizedPersisted.Length == 0)
+            return normalizedCurrent;
+        if (!AddressesMatch(normalizedCurrent, normalizedPersisted))
+            return normalizedCurrent;
+
+        var currentHasSizeSuffix = ParentheticalTextRegex.IsMatch(normalizedCurrent);
+        var persistedHasSizeSuffix = ParentheticalTextRegex.IsMatch(normalizedPersisted);
+        if (!currentHasSizeSuffix && persistedHasSizeSuffix)
+            return normalizedPersisted;
+
+        return normalizedCurrent;
+    }
+
+    internal static string StripHousingOwnerSuffix(string value)
+    {
+        var normalizedValue = NormalizeHousingDisplayValue(value);
+        return normalizedValue.Length == 0 ? string.Empty : OwnerSuffixRegex.Replace(normalizedValue, string.Empty).Trim();
+    }
+
+    internal static bool HousingDisplayValuesMatch(string left, string right)
+    {
+        return AddressesMatch(left, right);
     }
 
     public static int GetHighestJobLevel(IEnumerable<JobEntry> jobs) => jobs.Any() ? jobs.Max(j => j.Level) : 0;
@@ -305,6 +406,11 @@ public sealed class XaCharacterSnapshotRepository
 
     private static XaCharacterSnapshotRow ReadRow(SqliteDataReader reader)
     {
+        var normalizedHousing = NormalizeHousingPayload(
+            reader["personal_estate"].ToString() ?? string.Empty,
+            reader["shared_estates"].ToString() ?? string.Empty,
+            reader["apartment"].ToString() ?? string.Empty);
+
         return new XaCharacterSnapshotRow
         {
             ContentId = (ulong)(long)reader["content_id"],
@@ -317,8 +423,9 @@ public sealed class XaCharacterSnapshotRepository
             FcTag = reader["fc_tag"].ToString() ?? string.Empty,
             FcPoints = Convert.ToInt32(reader["fc_points"]),
             FcEstate = reader["fc_estate"].ToString() ?? string.Empty,
-            PersonalEstate = reader["personal_estate"].ToString() ?? string.Empty,
-            Apartment = reader["apartment"].ToString() ?? string.Empty,
+            PersonalEstate = normalizedHousing.PersonalEstate,
+            SharedEstates = normalizedHousing.SharedEstates,
+            Apartment = normalizedHousing.Apartment,
             Gil = Convert.ToInt32(reader["gil"]),
             RetainerGil = Convert.ToInt32(reader["retainer_gil"]),
             RetainerCount = Convert.ToInt32(reader["retainer_count"]),
@@ -392,8 +499,8 @@ public sealed class XaCharacterSnapshotRepository
     {
         return jobs.Select(job => new JobEntry
         {
-            Abbreviation = job.Abbreviation,
-            Name = NormalizeTitle(job.Name),
+            Abbreviation = NormalizeUpper(job.Abbreviation),
+            Name = NormalizeUpper(job.Name),
             Category = job.Category,
             Level = job.Level,
             IsUnlocked = job.IsUnlocked,
@@ -481,12 +588,12 @@ public sealed class XaCharacterSnapshotRepository
         return fallbackName ?? string.Empty;
     }
 
-    private static string NormalizeTitle(string value)
+    private static string NormalizeUpper(string value)
     {
         if (string.IsNullOrWhiteSpace(value))
             return string.Empty;
 
-        return CultureInfo.InvariantCulture.TextInfo.ToTitleCase(value.ToLowerInvariant());
+        return value.Trim().ToUpperInvariant();
     }
 
     private static string Serialize<T>(T value, string fallbackJson)
@@ -547,6 +654,7 @@ public sealed class XaCharacterSnapshotRepository
         string fallbackDatacenter,
         string fallbackRegion,
         string fallbackPersonalEstate,
+        string fallbackSharedEstates,
         string fallbackApartment,
         int fallbackGil,
         int fallbackRetainerGil)
@@ -557,6 +665,7 @@ public sealed class XaCharacterSnapshotRepository
         var datacenter = fallbackDatacenter ?? string.Empty;
         var region = fallbackRegion ?? string.Empty;
         var personalEstate = fallbackPersonalEstate ?? string.Empty;
+        var sharedEstates = fallbackSharedEstates ?? string.Empty;
         var apartment = fallbackApartment ?? string.Empty;
         var gil = fallbackGil;
         var retainerGil = fallbackRetainerGil;
@@ -569,6 +678,7 @@ public sealed class XaCharacterSnapshotRepository
             datacenter = GetString(character, "datacenter", datacenter);
             region = GetString(character, "region", region);
             personalEstate = GetString(character, "personalEstate", personalEstate);
+            sharedEstates = GetString(character, "sharedEstates", sharedEstates);
             apartment = GetString(character, "apartment", apartment);
             gil = GetInt32(character, "gil", gil);
             retainerGil = GetInt32(character, "retainerGil", retainerGil);
@@ -576,6 +686,7 @@ public sealed class XaCharacterSnapshotRepository
 
         datacenter = ResolveDatacenter(world, datacenter);
         region = ResolveRegion(world, region);
+        var normalizedHousing = NormalizeHousingPayload(personalEstate, sharedEstates, apartment);
 
         return new
         {
@@ -584,11 +695,105 @@ public sealed class XaCharacterSnapshotRepository
             world,
             datacenter,
             region,
-            personalEstate,
-            apartment,
+            personalEstate = normalizedHousing.PersonalEstate,
+            sharedEstates = normalizedHousing.SharedEstates,
+            apartment = normalizedHousing.Apartment,
             gil,
             retainerGil,
         };
+    }
+
+    private static IEnumerable<string> SplitHousingEntries(string value)
+    {
+        return (value ?? string.Empty)
+            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(NormalizeHousingDisplayValue)
+            .Where(entry => entry.Length > 0);
+    }
+
+    private static bool AddressesMatch(string left, string right)
+    {
+        if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
+            return false;
+
+        var leftKey = BuildHousingComparisonKey(left);
+        var rightKey = BuildHousingComparisonKey(right);
+        if (leftKey.Length > 0 && rightKey.Length > 0)
+            return leftKey.Equals(rightKey, StringComparison.OrdinalIgnoreCase);
+
+        return NormalizeHousingTextForComparison(left).Equals(NormalizeHousingTextForComparison(right), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildHousingComparisonKey(string value)
+    {
+        var normalizedValue = StripHousingOwnerSuffix(value);
+        if (normalizedValue.Length == 0)
+            return string.Empty;
+
+        var plotNumber = ExtractNumber(PlotNumberRegex, normalizedValue, "plot");
+        var wardNumber = ExtractWardNumber(normalizedValue);
+        var districtName = ExtractDistrictName(normalizedValue);
+        if (plotNumber <= 0 || wardNumber <= 0 || districtName.Length == 0)
+            return string.Empty;
+
+        return $"plot:{plotNumber}|ward:{wardNumber}|district:{districtName}";
+    }
+
+    private static int ExtractWardNumber(string value)
+    {
+        var match = WardNumberRegex.Match(value);
+        if (!match.Success)
+            return 0;
+
+        if (int.TryParse(match.Groups["wardAfter"].Value, out var wardAfter))
+            return wardAfter;
+
+        if (int.TryParse(match.Groups["wardBefore"].Value, out var wardBefore))
+            return wardBefore;
+
+        return 0;
+    }
+
+    private static int ExtractNumber(Regex regex, string value, string groupName)
+    {
+        var match = regex.Match(value);
+        if (!match.Success)
+            return 0;
+
+        return int.TryParse(match.Groups[groupName].Value, out var parsedValue) ? parsedValue : 0;
+    }
+
+    private static string ExtractDistrictName(string value)
+    {
+        return NormalizeHousingTextForComparison(ExtractDistrictDisplayName(value));
+    }
+
+    private static string ExtractDistrictDisplayName(string value)
+    {
+        var segments = StripHousingOwnerSuffix(value)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries)
+            .Select(segment => segment.Trim())
+            .Where(segment => segment.Length > 0)
+            .ToArray();
+        if (segments.Length == 0)
+            return string.Empty;
+
+        return ParentheticalTextRegex.Replace(segments[^1], string.Empty).Trim().Trim(',', ' ');
+    }
+
+    private static string NormalizeHousingDisplayValue(string value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+    }
+
+    private static string NormalizeHousingTextForComparison(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        var withoutParenthetical = ParentheticalTextRegex.Replace(StripHousingOwnerSuffix(value), string.Empty);
+        var collapsedWhitespace = WhitespaceRegex.Replace(withoutParenthetical, " ").Trim();
+        return collapsedWhitespace.Trim(',', ' ').ToLowerInvariant();
     }
 
     private static bool TryGetPropertyIgnoreCase(JsonElement element, string propertyName, out JsonElement value)
@@ -693,6 +898,7 @@ public sealed class XaCharacterSnapshotRow
     public int FcPoints { get; init; }
     public string FcEstate { get; init; } = string.Empty;
     public string PersonalEstate { get; init; } = string.Empty;
+    public string SharedEstates { get; init; } = string.Empty;
     public string Apartment { get; init; } = string.Empty;
     public int Gil { get; init; }
     public int RetainerGil { get; init; }

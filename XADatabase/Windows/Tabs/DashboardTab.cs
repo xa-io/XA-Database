@@ -22,6 +22,8 @@ namespace XADatabase.Windows;
 /// </summary>
 public partial class MainWindow
 {
+    private const float DashboardComparisonSectionHeight = 300f;
+
     private void DrawDashboardTab()
     {
         using var tab = ImRaii.TabItem("Dashboard");
@@ -43,25 +45,35 @@ public partial class MainWindow
             return;
         }
 
+        static string BuildLocationLabel(XaCharacterSnapshotData snapshot)
+        {
+            var parts = new[] { snapshot.Row.Region, snapshot.Row.Datacenter, snapshot.Row.World }
+                .Where(part => !string.IsNullOrWhiteSpace(part));
+            var label = string.Join(" / ", parts);
+            return string.IsNullOrWhiteSpace(label) ? "-" : label;
+        }
+
         // Build sortable row data
+        var snapshotLookup = GetDashboardSnapshotCache();
         var rows = new List<DashRow>(knownCharacters.Count);
         var snapshotMap = new Dictionary<ulong, XaCharacterSnapshotData>();
-        long totalGil = 0, totalMarketValue = 0;
+        long totalGil = 0, totalRetainerGil = 0, totalMarketValue = 0;
         int totalRetainers = 0, totalListings = 0, totalVenturesReady = 0;
 
         foreach (var ch in knownCharacters)
         {
-            var snapshot = plugin.SnapshotRepo.GetSnapshot(ch.ContentId);
-            if (snapshot == null)
+            if (!snapshotLookup.TryGetValue(ch.ContentId, out var snapshot))
                 continue;
 
             snapshotMap[ch.ContentId] = snapshot;
 
-            long charGil = snapshot.Row.Gil + snapshot.Row.RetainerGil;
+            long charGil = snapshot.Row.Gil;
+            long retainerGil = snapshot.Row.RetainerGil;
             long marketVal = snapshot.Listings.Sum(l => (long)l.UnitPrice * l.Quantity);
             int venturesReady = snapshot.Retainers.Count(r => r.VentureStatus == "Complete");
 
             totalGil += charGil;
+            totalRetainerGil += retainerGil;
             totalMarketValue += marketVal;
             totalRetainers += snapshot.Retainers.Count;
             totalListings += snapshot.Listings.Count;
@@ -76,7 +88,7 @@ public partial class MainWindow
 
             rows.Add(new DashRow
             {
-                Name = snapshot.Row.CharacterName, World = snapshot.Row.World, Server = snapshot.Row.Datacenter, Region = snapshot.Row.Region, Gil = charGil,
+                Name = snapshot.Row.CharacterName, World = snapshot.Row.World, Server = snapshot.Row.Datacenter, Region = snapshot.Row.Region, Gil = charGil, RetainerGil = retainerGil,
                 MarketValue = marketVal, Retainers = snapshot.Retainers.Count,
                 Listings = snapshot.Listings.Count, VenturesReady = venturesReady,
                 FcName = snapshot.FreeCompany?.Name ?? snapshot.Row.FcName ?? "-", LastSeen = snapshot.Row.UpdatedUtc,
@@ -84,12 +96,12 @@ public partial class MainWindow
             });
         }
 
-        var colCount = 11 + DashJobAbbrevs.Length; // 11 base + job columns
+        var colCount = 12 + DashJobAbbrevs.Length;
 
         using (var dashTable = ImRaii.Table("DashboardTable", colCount,
             ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY | ImGuiTableFlags.ScrollX
             | ImGuiTableFlags.Sortable | ImGuiTableFlags.SortTristate,
-            new Vector2(0, 300)))
+            new Vector2(0, DashboardComparisonSectionHeight)))
         {
             if (dashTable.Success)
             {
@@ -98,6 +110,7 @@ public partial class MainWindow
                 ImGui.TableSetupColumn("Server", ImGuiTableColumnFlags.WidthFixed, 90);
                 ImGui.TableSetupColumn("Region", ImGuiTableColumnFlags.WidthFixed, 70);
                 ImGui.TableSetupColumn("Gil", ImGuiTableColumnFlags.WidthFixed, 90);
+                ImGui.TableSetupColumn("Retainer Gil", ImGuiTableColumnFlags.WidthFixed, 100);
                 ImGui.TableSetupColumn("Market", ImGuiTableColumnFlags.WidthFixed, 90);
                 ImGui.TableSetupColumn("Retainers", ImGuiTableColumnFlags.WidthFixed, 65);
                 ImGui.TableSetupColumn("Listings", ImGuiTableColumnFlags.WidthFixed, 60);
@@ -123,10 +136,9 @@ public partial class MainWindow
                         rows.Sort((a, b) =>
                         {
                             int cmp;
-                            if (col >= 11 && col < 11 + DashJobAbbrevs.Length)
+                            if (col >= 12 && col < 12 + DashJobAbbrevs.Length)
                             {
-                                // Sort by job level
-                                var jobName = DashJobAbbrevs[col - 11];
+                                var jobName = DashJobAbbrevs[col - 12];
                                 var aLv = a.JobLevels != null && a.JobLevels.TryGetValue(jobName, out var av) ? av : 0;
                                 var bLv = b.JobLevels != null && b.JobLevels.TryGetValue(jobName, out var bv) ? bv : 0;
                                 cmp = aLv.CompareTo(bLv);
@@ -140,12 +152,13 @@ public partial class MainWindow
                                     2 => string.Compare(a.Server, b.Server, StringComparison.OrdinalIgnoreCase),
                                     3 => string.Compare(a.Region, b.Region, StringComparison.OrdinalIgnoreCase),
                                     4 => a.Gil.CompareTo(b.Gil),
-                                    5 => a.MarketValue.CompareTo(b.MarketValue),
-                                    6 => a.Retainers.CompareTo(b.Retainers),
-                                    7 => a.Listings.CompareTo(b.Listings),
-                                    8 => a.VenturesReady.CompareTo(b.VenturesReady),
-                                    9 => string.Compare(a.FcName, b.FcName, StringComparison.OrdinalIgnoreCase),
-                                    10 => string.Compare(a.LastSeen, b.LastSeen, StringComparison.Ordinal),
+                                    5 => a.RetainerGil.CompareTo(b.RetainerGil),
+                                    6 => a.MarketValue.CompareTo(b.MarketValue),
+                                    7 => a.Retainers.CompareTo(b.Retainers),
+                                    8 => a.Listings.CompareTo(b.Listings),
+                                    9 => a.VenturesReady.CompareTo(b.VenturesReady),
+                                    10 => string.Compare(a.FcName, b.FcName, StringComparison.OrdinalIgnoreCase),
+                                    11 => string.Compare(a.LastSeen, b.LastSeen, StringComparison.Ordinal),
                                     _ => 0,
                                 };
                             }
@@ -163,6 +176,7 @@ public partial class MainWindow
                     ImGui.TableNextColumn(); ImGui.Text(row.Server);
                     ImGui.TableNextColumn(); ImGui.Text(row.Region);
                     ImGui.TableNextColumn(); ImGui.Text($"{row.Gil:N0}");
+                    ImGui.TableNextColumn(); ImGui.Text($"{row.RetainerGil:N0}");
                     ImGui.TableNextColumn();
                     if (row.MarketValue > 0)
                         ImGui.TextColored(new Vector4(0.4f, 0.8f, 1.0f, 1.0f), $"{row.MarketValue:N0}");
@@ -202,6 +216,8 @@ public partial class MainWindow
                 ImGui.TableNextColumn();
                 ImGui.TextColored(new Vector4(1.0f, 0.9f, 0.4f, 1.0f), $"{totalGil:N0}");
                 ImGui.TableNextColumn();
+                ImGui.TextColored(new Vector4(1.0f, 0.9f, 0.4f, 1.0f), $"{totalRetainerGil:N0}");
+                ImGui.TableNextColumn();
                 ImGui.TextColored(new Vector4(1.0f, 0.9f, 0.4f, 1.0f), $"{totalMarketValue:N0}");
                 ImGui.TableNextColumn();
                 ImGui.TextColored(new Vector4(1.0f, 0.9f, 0.4f, 1.0f), $"{totalRetainers}");
@@ -214,7 +230,6 @@ public partial class MainWindow
                     ImGui.TextDisabled("0");
                 ImGui.TableNextColumn(); ImGui.Text(""); // FC
                 ImGui.TableNextColumn(); ImGui.Text(""); // Last Seen
-                // Empty job cells in totals row
                 for (int j = 0; j < DashJobAbbrevs.Length; j++)
                     ImGui.TableNextColumn();
             }
@@ -228,31 +243,75 @@ public partial class MainWindow
         ImGui.Separator();
         ImGui.Spacing();
 
-        using (var msqCompTable = ImRaii.Table("MsqCompTable", 3,
-            ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+        var msqRows = new List<MsqRow>(knownCharacters.Count);
+        foreach (var ch in knownCharacters)
+        {
+            if (!snapshotMap.TryGetValue(ch.ContentId, out var snapshot))
+                continue;
+
+            var milestones = snapshot.MsqMilestones;
+            if (milestones.Count == 0)
+                continue;
+
+            var completed = milestones.Count(m => m.IsComplete);
+            var total = milestones.Count;
+            var pct = total > 0 ? (float)completed / total : 0f;
+
+            msqRows.Add(new MsqRow
+            {
+                Location = BuildLocationLabel(snapshot),
+                Name = snapshot.Row.CharacterName,
+                Completed = completed,
+                Total = total,
+                Percent = pct,
+            });
+        }
+
+        using (var msqCompTable = ImRaii.Table("MsqCompTable", 4,
+            ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY
+            | ImGuiTableFlags.Sortable | ImGuiTableFlags.SortTristate,
+            new Vector2(0, DashboardComparisonSectionHeight)))
         {
             if (msqCompTable.Success)
             {
-                ImGui.TableSetupColumn("Character", ImGuiTableColumnFlags.WidthStretch);
+                ImGui.TableSetupColumn("Region / Server / World", ImGuiTableColumnFlags.WidthFixed, 200);
+                ImGui.TableSetupColumn("Character", ImGuiTableColumnFlags.DefaultSort | ImGuiTableColumnFlags.WidthStretch);
                 ImGui.TableSetupColumn("Progress", ImGuiTableColumnFlags.WidthFixed, 100);
-                ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, 140);
+                ImGui.TableSetupColumn("Percent Complete", ImGuiTableColumnFlags.WidthFixed, 140);
+                ImGui.TableSetupScrollFreeze(0, 1);
                 ImGui.TableHeadersRow();
 
-                foreach (var ch in knownCharacters)
+                var msqSortSpecs = ImGui.TableGetSortSpecs();
+                if (msqSortSpecs.SpecsDirty)
+                    msqSortSpecs.SpecsDirty = false;
+                if (msqSortSpecs.SpecsCount > 0)
                 {
-                    if (!snapshotMap.TryGetValue(ch.ContentId, out var snapshot))
-                        continue;
+                    unsafe
+                    {
+                        var spec = msqSortSpecs.Specs;
+                        var asc = spec.SortDirection == ImGuiSortDirection.Ascending;
+                        msqRows.Sort((a, b) =>
+                        {
+                            int cmp = spec.ColumnIndex switch
+                            {
+                                0 => string.Compare(a.Location, b.Location, StringComparison.OrdinalIgnoreCase),
+                                1 => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase),
+                                2 => a.Completed != b.Completed ? a.Completed.CompareTo(b.Completed) : a.Total.CompareTo(b.Total),
+                                3 => a.Percent.CompareTo(b.Percent),
+                                _ => 0,
+                            };
+                            return asc ? cmp : -cmp;
+                        });
+                    }
+                }
 
-                    var milestones = snapshot.MsqMilestones;
-                    if (milestones.Count == 0) continue;
-                    var completed = milestones.Count(m => m.IsComplete);
-                    var total = milestones.Count;
-                    var pct = total > 0 ? (float)completed / total : 0f;
-
+                foreach (var row in msqRows)
+                {
                     ImGui.TableNextRow();
-                    ImGui.TableNextColumn(); ImGui.Text(ch.Name);
-                    ImGui.TableNextColumn(); ImGui.Text($"{completed}/{total}");
-                    ImGui.TableNextColumn(); ImGui.ProgressBar(pct, new Vector2(-1, 0), $"{pct:P0}");
+                    ImGui.TableNextColumn(); ImGui.Text(row.Location);
+                    ImGui.TableNextColumn(); ImGui.Text(row.Name);
+                    ImGui.TableNextColumn(); ImGui.Text($"{row.Completed}/{row.Total}");
+                    ImGui.TableNextColumn(); ImGui.ProgressBar(row.Percent, new Vector2(-1, 0), $"{row.Percent:P0}");
                 }
             }
         }
@@ -280,6 +339,7 @@ public partial class MainWindow
 
             collRows.Add(new CollRow
             {
+                Location = BuildLocationLabel(snapshot),
                 Name = ch.Name,
                 MountsU = mounts?.Unlocked ?? 0, MountsT = mounts?.Total ?? 0,
                 MinionsU = minions?.Unlocked ?? 0, MinionsT = minions?.Total ?? 0,
@@ -288,17 +348,20 @@ public partial class MainWindow
             });
         }
 
-        using (var collCompTable = ImRaii.Table("CollCompTable", 5,
-            ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg
-            | ImGuiTableFlags.Sortable | ImGuiTableFlags.SortTristate))
+        using (var collCompTable = ImRaii.Table("CollCompTable", 6,
+            ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY
+            | ImGuiTableFlags.Sortable | ImGuiTableFlags.SortTristate,
+            new Vector2(0, DashboardComparisonSectionHeight)))
         {
             if (collCompTable.Success)
             {
+                ImGui.TableSetupColumn("Region / Server / World", ImGuiTableColumnFlags.WidthFixed, 200);
                 ImGui.TableSetupColumn("Character", ImGuiTableColumnFlags.DefaultSort | ImGuiTableColumnFlags.WidthStretch);
                 ImGui.TableSetupColumn("Mounts", ImGuiTableColumnFlags.WidthFixed, 70);
                 ImGui.TableSetupColumn("Minions", ImGuiTableColumnFlags.WidthFixed, 70);
                 ImGui.TableSetupColumn("Orchestrion", ImGuiTableColumnFlags.WidthFixed, 80);
                 ImGui.TableSetupColumn("TT Cards", ImGuiTableColumnFlags.WidthFixed, 70);
+                ImGui.TableSetupScrollFreeze(0, 1);
                 ImGui.TableHeadersRow();
 
                 // Apply sorting — always sort since row data is rebuilt each frame
@@ -316,11 +379,12 @@ public partial class MainWindow
                         {
                             int cmp = col switch
                             {
-                                0 => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase),
-                                1 => a.MountsU.CompareTo(b.MountsU),
-                                2 => a.MinionsU.CompareTo(b.MinionsU),
-                                3 => a.OrchU.CompareTo(b.OrchU),
-                                4 => a.TtU.CompareTo(b.TtU),
+                                0 => string.Compare(a.Location, b.Location, StringComparison.OrdinalIgnoreCase),
+                                1 => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase),
+                                2 => a.MountsU.CompareTo(b.MountsU),
+                                3 => a.MinionsU.CompareTo(b.MinionsU),
+                                4 => a.OrchU.CompareTo(b.OrchU),
+                                5 => a.TtU.CompareTo(b.TtU),
                                 _ => 0,
                             };
                             return asc ? cmp : -cmp;
@@ -331,6 +395,7 @@ public partial class MainWindow
                 foreach (var cr in collRows)
                 {
                     ImGui.TableNextRow();
+                    ImGui.TableNextColumn(); ImGui.Text(cr.Location);
                     ImGui.TableNextColumn(); ImGui.Text(cr.Name);
                     ImGui.TableNextColumn(); ImGui.Text(cr.MountsT > 0 ? $"{cr.MountsU}/{cr.MountsT}" : "-");
                     ImGui.TableNextColumn(); ImGui.Text(cr.MinionsT > 0 ? $"{cr.MinionsU}/{cr.MinionsT}" : "-");
