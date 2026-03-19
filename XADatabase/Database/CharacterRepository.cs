@@ -154,6 +154,11 @@ public class CharacterRepository
         return cmd.ExecuteNonQuery();
     }
 
+    public void Delete(ulong contentId)
+    {
+        db.DeleteCharacter(contentId);
+    }
+
     public List<CharacterRow> GetAll()
     {
         var results = new List<CharacterRow>();

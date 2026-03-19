@@ -97,6 +97,9 @@ public partial class MainWindow
         }
 
         var colCount = 12 + DashJobAbbrevs.Length;
+        var deleteModifierHeld = IsDeleteModifierHeld();
+        ulong? pendingDeleteContentId = null;
+        string pendingDeleteLabel = string.Empty;
 
         using (var dashTable = ImRaii.Table("DashboardTable", colCount,
             ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY | ImGuiTableFlags.ScrollX
@@ -171,7 +174,28 @@ public partial class MainWindow
                 {
                     ImGui.TableNextRow();
                     ImGui.TableNextColumn();
+                    var cellStartX = ImGui.GetCursorPosX();
+                    var cellWidth = ImGui.GetContentRegionAvail().X;
+                    var deleteButtonWidth = ImGui.CalcTextSize("X").X + (ImGui.GetStyle().FramePadding.X * 2f);
                     ImGui.Text(row.Name);
+                    var deleteButtonX = cellStartX + MathF.Max(0f, cellWidth - deleteButtonWidth);
+                    ImGui.SameLine(deleteButtonX);
+                    PushDeleteButtonColors(deleteModifierHeld);
+                    ImGui.BeginDisabled(!deleteModifierHeld);
+                    if (ImGui.SmallButton($"X##DashboardDelete{row.ContentId}"))
+                    {
+                        pendingDeleteContentId = row.ContentId;
+                        pendingDeleteLabel = $"{row.Name} @ {row.World}";
+                    }
+                    ImGui.EndDisabled();
+                    PopDeleteButtonColors();
+                    if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                    {
+                        if (!deleteModifierHeld)
+                            ImGui.SetTooltip("Hold Ctrl+Shift and click to select.");
+                        else
+                            ImGui.SetTooltip($"Delete {row.Name} @ {row.World} from the database.");
+                    }
                     ImGui.TableNextColumn(); ImGui.Text(row.World);
                     ImGui.TableNextColumn(); ImGui.Text(row.Server);
                     ImGui.TableNextColumn(); ImGui.Text(row.Region);
@@ -233,6 +257,14 @@ public partial class MainWindow
                 for (int j = 0; j < DashJobAbbrevs.Length; j++)
                     ImGui.TableNextColumn();
             }
+        }
+
+        if (pendingDeleteContentId.HasValue)
+        {
+            if (DeleteCharacterSnapshot(pendingDeleteContentId.Value, pendingDeleteLabel, out var errorMessage))
+                SetSettingsStatus($"Deleted {pendingDeleteLabel} from the database.");
+            else
+                SetSettingsStatus($"Delete failed: {errorMessage}");
         }
 
         // ── MSQ Comparison ──

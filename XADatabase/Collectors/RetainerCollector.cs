@@ -12,8 +12,9 @@ public static class RetainerCollector
 {
     private static readonly string[] TownNames =
     {
-        "Limsa Lominsa", "Gridania", "Ul'dah", "Ishgard",
-        "Kugane", "Crystarium", "Old Sharlayan", "Tuliyollal",
+        "", "Limsa Lominsa", "Gridania", "Ul'dah", "Ishgard",
+        "", "", "Kugane", "", "",
+        "Crystarium", "", "Old Sharlayan", "", "Tuliyollal",
     };
     private static readonly InventoryType[] RetainerPages =
     {
@@ -42,7 +43,9 @@ public static class RetainerCollector
                 continue;
 
             var townByte = (int)retainer->Town;
-            var townName = townByte >= 0 && townByte < TownNames.Length ? TownNames[townByte] : "Unknown";
+            var townName = townByte >= 0 && townByte < TownNames.Length && !string.IsNullOrWhiteSpace(TownNames[townByte])
+                ? TownNames[townByte]
+                : "Unknown";
 
             // Venture status
             var ventureId = retainer->VentureId;

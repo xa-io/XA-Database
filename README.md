@@ -14,9 +14,10 @@ A Dalamud plugin for FINAL FANTASY XIV that collects character data — inventor
 - **Housing** — Track personal, shared, and apartment housing with cleaner normalization.
 - **Collections & Quests** — View mounts, minions, rolls, cards, active quests, and MSQ progress.
 - **Dashboard** — Compare characters, gil, retainers, ventures, market value, MSQ, and collections in one view.
+- **Safe Character Cleanup** — Delete stored character snapshots from the Dashboard or Settings only while holding `Ctrl+Shift`.
 - **Auto-Save** — Save on login, logout, timers, and supported addon or window flows.
 - **Database Health Checks** — Run built-in health, read/write, and integrity checks from Settings.
-- **Export** — Export current or saved character data to CSV or JSON.
+- **Export** — Export current or saved character data to CSV or JSON, and open the actual `xa.db` folder directly from Settings.
 
 ## Commands
 

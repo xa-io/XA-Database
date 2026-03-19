@@ -582,6 +582,28 @@ public sealed class DatabaseService : IDisposable
         }
     }
 
+    public void DeleteCharacter(ulong contentId)
+    {
+        var conn = GetConnection();
+        if (ActiveTransaction != null)
+        {
+            DeleteCharacterInternal(conn, ActiveTransaction, (long)contentId);
+            return;
+        }
+
+        using var transaction = conn.BeginTransaction();
+        try
+        {
+            DeleteCharacterInternal(conn, transaction, (long)contentId);
+            transaction.Commit();
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+    }
+
     public void ClearAllCharacterData()
     {
         var conn = GetConnection();
@@ -664,6 +686,141 @@ public sealed class DatabaseService : IDisposable
             INSERT INTO schema_version (version) VALUES (@version)";
         versionCmd.Parameters.AddWithValue("@version", Schema.CurrentVersion);
         versionCmd.ExecuteNonQuery();
+    }
+
+    private void DeleteCharacterInternal(SqliteConnection conn, SqliteTransaction transaction, long contentId)
+    {
+        var fcId = GetCharacterFreeCompanyId(conn, transaction, contentId);
+        var replacementContentId = GetReplacementFreeCompanyOwner(conn, transaction, contentId, fcId);
+        var retainerIds = GetCharacterRetainerIds(conn, transaction, contentId);
+
+        DeleteRowsByContentId(conn, transaction, "currency_balances", contentId);
+        DeleteRowsByContentId(conn, transaction, "currency_history", contentId);
+        DeleteRowsByContentId(conn, transaction, "job_levels", contentId);
+        DeleteRowsByContentId(conn, transaction, "inventory_summaries", contentId);
+        DeleteRowsByContentId(conn, transaction, "container_items", contentId);
+        DeleteRowsByContentId(conn, transaction, "collection_summaries", contentId);
+        DeleteRowsByContentId(conn, transaction, "active_quests", contentId);
+        DeleteRowsByContentId(conn, transaction, "msq_milestones", contentId);
+        DeleteRowsByContentId(conn, transaction, "squadron_info", contentId);
+        DeleteRowsByContentId(conn, transaction, "squadron_members", contentId);
+
+        foreach (var retainerId in retainerIds)
+        {
+            DeleteRowsByColumnValue(conn, transaction, "retainer_listings", "retainer_id", retainerId);
+            DeleteRowsByColumnValue(conn, transaction, "retainer_items", "retainer_id", retainerId);
+            DeleteRowsByColumnValue(conn, transaction, "retainer_sales", "retainer_id", retainerId);
+        }
+
+        DeleteRowsByContentId(conn, transaction, "retainers", contentId);
+        DeleteRowsByContentId(conn, transaction, "characters", contentId);
+        DeleteRowsByContentId(conn, transaction, "xa_characters", contentId);
+
+        if (fcId == 0)
+            return;
+
+        if (replacementContentId != 0)
+        {
+            ReassignFreeCompanyOwner(conn, transaction, fcId, replacementContentId);
+            return;
+        }
+
+        DeleteRowsByColumnValue(conn, transaction, "fc_members", "fc_id", fcId);
+        DeleteRowsByColumnValue(conn, transaction, "voyages", "fc_id", fcId);
+        DeleteRowsByColumnValue(conn, transaction, "free_companies", "fc_id", fcId);
+    }
+
+    private long GetCharacterFreeCompanyId(SqliteConnection conn, SqliteTransaction transaction, long contentId)
+    {
+        if (TableExists("xa_characters"))
+        {
+            using var xaCmd = conn.CreateCommand();
+            xaCmd.Transaction = transaction;
+            xaCmd.CommandText = "SELECT fc_id FROM xa_characters WHERE content_id = @cid LIMIT 1";
+            xaCmd.Parameters.AddWithValue("@cid", contentId);
+            var xaResult = xaCmd.ExecuteScalar();
+            if (xaResult != null && xaResult != DBNull.Value)
+                return Convert.ToInt64(xaResult);
+        }
+
+        if (TableExists("free_companies"))
+        {
+            using var legacyCmd = conn.CreateCommand();
+            legacyCmd.Transaction = transaction;
+            legacyCmd.CommandText = "SELECT fc_id FROM free_companies WHERE content_id = @cid LIMIT 1";
+            legacyCmd.Parameters.AddWithValue("@cid", contentId);
+            var legacyResult = legacyCmd.ExecuteScalar();
+            if (legacyResult != null && legacyResult != DBNull.Value)
+                return Convert.ToInt64(legacyResult);
+        }
+
+        return 0;
+    }
+
+    private long GetReplacementFreeCompanyOwner(SqliteConnection conn, SqliteTransaction transaction, long deletedContentId, long fcId)
+    {
+        if (fcId == 0 || !TableExists("xa_characters"))
+            return 0;
+
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = @"
+            SELECT content_id
+            FROM xa_characters
+            WHERE fc_id = @fcid AND content_id != @cid
+            ORDER BY updated_utc DESC, content_id ASC
+            LIMIT 1";
+        cmd.Parameters.AddWithValue("@fcid", fcId);
+        cmd.Parameters.AddWithValue("@cid", deletedContentId);
+        var result = cmd.ExecuteScalar();
+        return result != null && result != DBNull.Value ? Convert.ToInt64(result) : 0;
+    }
+
+    private List<long> GetCharacterRetainerIds(SqliteConnection conn, SqliteTransaction transaction, long contentId)
+    {
+        var retainerIds = new List<long>();
+        if (!TableExists("retainers"))
+            return retainerIds;
+
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = "SELECT retainer_id FROM retainers WHERE content_id = @cid";
+        cmd.Parameters.AddWithValue("@cid", contentId);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            retainerIds.Add((long)reader["retainer_id"]);
+
+        return retainerIds;
+    }
+
+    private void DeleteRowsByContentId(SqliteConnection conn, SqliteTransaction transaction, string tableName, long contentId)
+    {
+        DeleteRowsByColumnValue(conn, transaction, tableName, "content_id", contentId);
+    }
+
+    private void DeleteRowsByColumnValue(SqliteConnection conn, SqliteTransaction transaction, string tableName, string columnName, long value)
+    {
+        if (!TableExists(tableName))
+            return;
+
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = $"DELETE FROM {tableName} WHERE {columnName} = @value";
+        cmd.Parameters.AddWithValue("@value", value);
+        cmd.ExecuteNonQuery();
+    }
+
+    private void ReassignFreeCompanyOwner(SqliteConnection conn, SqliteTransaction transaction, long fcId, long contentId)
+    {
+        if (!TableExists("free_companies"))
+            return;
+
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = "UPDATE free_companies SET content_id = @cid WHERE fc_id = @fcid";
+        cmd.Parameters.AddWithValue("@cid", contentId);
+        cmd.Parameters.AddWithValue("@fcid", fcId);
+        cmd.ExecuteNonQuery();
     }
 
     private bool NeedsXaCharactersUpgrade()

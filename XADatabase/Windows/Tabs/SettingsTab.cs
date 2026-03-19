@@ -207,6 +207,8 @@ public partial class MainWindow
         ImGui.Spacing();
 
         var charLabel = viewingContentId.HasValue ? viewingCharName : "Current Character";
+        var deleteModifierHeld = IsDeleteModifierHeld();
+        var hasDeleteTarget = TryGetCurrentDeleteTarget(out var deleteTargetContentId, out var deleteTargetLabel);
 
         if (ImGui.Button("Export Current CSV"))
         {
@@ -321,24 +323,58 @@ public partial class MainWindow
         {
             try
             {
-                var exportDir = ExportService.GetExportDir(plugin.DatabaseService.GetDbDirectory());
+                var dbDir = plugin.DatabaseService.GetDbDirectory();
                 Process.Start(new ProcessStartInfo
                 {
-                    FileName = exportDir,
+                    FileName = dbDir,
                     UseShellExecute = true,
                 });
+                SetSettingsStatus($"Opened {dbDir}");
             }
             catch (Exception ex)
             {
-                SetExportStatus($"Could not open folder: {ex.Message}");
+                SetSettingsStatus($"Could not open folder: {ex.Message}");
             }
         }
+
+        ImGui.SameLine();
+        PushDeleteButtonColors(deleteModifierHeld && hasDeleteTarget);
+        ImGui.BeginDisabled(!deleteModifierHeld || !hasDeleteTarget);
+        if (ImGui.Button("Delete Current Character"))
+        {
+            if (DeleteCharacterSnapshot(deleteTargetContentId, deleteTargetLabel, out var errorMessage))
+                SetSettingsStatus($"Deleted {deleteTargetLabel} from the database.");
+            else
+                SetSettingsStatus($"Delete failed: {errorMessage}");
+        }
+        ImGui.EndDisabled();
+        PopDeleteButtonColors();
+
+        if (ImGui.IsItemHovered())
+        {
+            if (!hasDeleteTarget)
+                ImGui.SetTooltip("No character is currently available for deletion.");
+            else if (!deleteModifierHeld)
+                ImGui.SetTooltip("Hold Ctrl+Shift to enable deletion.");
+            else
+                ImGui.SetTooltip($"Delete {deleteTargetLabel} from the database.");
+        }
+
+        ImGui.TextDisabled(hasDeleteTarget
+            ? $"Hold Ctrl+Shift to enable deletion for {deleteTargetLabel}."
+            : "No character is currently available for deletion.");
 
         // Show export status message
         if (!string.IsNullOrEmpty(exportStatusMessage) && DateTime.UtcNow < exportStatusExpiry)
         {
             ImGui.Spacing();
             ImGui.TextColored(new Vector4(0.4f, 1.0f, 0.4f, 1.0f), exportStatusMessage);
+        }
+
+        if (!string.IsNullOrEmpty(settingsHousingStatus) && DateTime.UtcNow < settingsHousingStatusExpiry)
+        {
+            ImGui.Spacing();
+            ImGui.TextColored(new Vector4(0.4f, 1.0f, 0.4f, 1.0f), settingsHousingStatus);
         }
 
         ImGui.Spacing();

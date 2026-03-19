@@ -9,6 +9,7 @@ namespace XADatabase.Windows;
 
 public partial class MainWindow
 {
+    private const int SaddlebagContainerSlotCount = 35;
     private static readonly string[] SaddlebagContainerNames =
     {
         "Saddlebag 1",
@@ -19,6 +20,9 @@ public partial class MainWindow
 
     private List<ContainerItemEntry> lastLiveCollectedItems = new();
     private readonly HashSet<string> lastLoadedItemContainers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<ulong> liveSessionRetainerListingIds = new();
+    private readonly HashSet<ulong> liveSessionRetainerInventoryIds = new();
+    private bool hasAuthoritativeLiveRetainerList;
     private readonly Dictionary<ulong, XaCharacterSnapshotData> dashboardSnapshotCache = new();
     private bool dashboardSnapshotCacheDirty = true;
 
@@ -43,6 +47,10 @@ public partial class MainWindow
         cachedApartment = snapshot.Row.Apartment;
         lastLiveCollectedItems.Clear();
         lastLoadedItemContainers.Clear();
+        liveSessionRetainerListingIds.Clear();
+        liveSessionRetainerInventoryIds.Clear();
+        hasAuthoritativeLiveRetainerList = false;
+        NormalizeSaddlebagInventorySummariesFromItems();
         NormalizeCachedRetainerState();
 
         if (cachedFc != null)
@@ -70,6 +78,9 @@ public partial class MainWindow
         cachedApartment = string.Empty;
         lastLiveCollectedItems.Clear();
         lastLoadedItemContainers.Clear();
+        liveSessionRetainerListingIds.Clear();
+        liveSessionRetainerInventoryIds.Clear();
+        hasAuthoritativeLiveRetainerList = false;
         DataCollected = false;
         lastRefreshTime = DateTime.MinValue;
         FreeCompanyCollector.ClearPersistedValues();
@@ -187,6 +198,79 @@ public partial class MainWindow
         cachedInventory = mergedInventory;
     }
 
+    private void ApplyPersistedRetainerState(XaCharacterSnapshotData? persistedSnapshot)
+    {
+        MergePersistedRetainers(persistedSnapshot);
+        ApplyPersistedRetainerListings(persistedSnapshot);
+        ApplyPersistedRetainerInventory(persistedSnapshot);
+    }
+
+    private void MergePersistedRetainers(XaCharacterSnapshotData? persistedSnapshot)
+    {
+        if (persistedSnapshot == null)
+            return;
+
+        var mergedRetainers = persistedSnapshot.Retainers
+            .Where(retainer => retainer.RetainerId != 0)
+            .Select(CloneRetainerEntry)
+            .ToDictionary(retainer => retainer.RetainerId);
+
+        foreach (var retainer in cachedRetainers.Where(retainer => retainer.RetainerId != 0))
+            mergedRetainers[retainer.RetainerId] = CloneRetainerEntry(retainer);
+
+        cachedRetainers = mergedRetainers.Values
+            .OrderBy(retainer => retainer.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(retainer => retainer.RetainerId)
+            .ToList();
+    }
+
+    private void ApplyPersistedRetainerListings(XaCharacterSnapshotData? persistedSnapshot)
+    {
+        var mergedListings = (persistedSnapshot?.Listings ?? new List<RetainerListingEntry>())
+            .Where(listing => listing.RetainerId != 0)
+            .Select(CloneRetainerListing)
+            .ToList();
+
+        foreach (var retainerId in liveSessionRetainerListingIds)
+        {
+            mergedListings.RemoveAll(entry => entry.RetainerId == retainerId);
+            mergedListings.AddRange(cachedListings
+                .Where(entry => entry.RetainerId == retainerId)
+                .Select(CloneRetainerListing));
+        }
+
+        if (hasAuthoritativeLiveRetainerList)
+        {
+            var zeroMarketRetainerIds = cachedRetainers
+                .Where(retainer => retainer.RetainerId != 0 && retainer.MarketItemCount == 0)
+                .Select(retainer => retainer.RetainerId)
+                .ToHashSet();
+
+            if (zeroMarketRetainerIds.Count > 0)
+                mergedListings.RemoveAll(entry => zeroMarketRetainerIds.Contains(entry.RetainerId));
+        }
+
+        cachedListings = mergedListings;
+    }
+
+    private void ApplyPersistedRetainerInventory(XaCharacterSnapshotData? persistedSnapshot)
+    {
+        var mergedRetainerItems = (persistedSnapshot?.RetainerItems ?? new List<RetainerInventoryItem>())
+            .Where(item => item.RetainerId != 0)
+            .Select(CloneRetainerInventoryItem)
+            .ToList();
+
+        foreach (var retainerId in liveSessionRetainerInventoryIds)
+        {
+            mergedRetainerItems.RemoveAll(entry => entry.RetainerId == retainerId);
+            mergedRetainerItems.AddRange(cachedRetainerItems
+                .Where(entry => entry.RetainerId == retainerId)
+                .Select(CloneRetainerInventoryItem));
+        }
+
+        cachedRetainerItems = mergedRetainerItems;
+    }
+
     private bool IsSaddlebagClearConfirmed(SnapshotTrigger trigger)
     {
         return trigger == SnapshotTrigger.AddonWatcher
@@ -226,12 +310,103 @@ public partial class MainWindow
         };
     }
 
+    private static RetainerEntry CloneRetainerEntry(RetainerEntry retainer)
+    {
+        return new RetainerEntry
+        {
+            RetainerId = retainer.RetainerId,
+            Name = retainer.Name,
+            ClassJob = retainer.ClassJob,
+            Level = retainer.Level,
+            Gil = retainer.Gil,
+            ItemCount = retainer.ItemCount,
+            MarketItemCount = retainer.MarketItemCount,
+            Town = retainer.Town,
+            VentureId = retainer.VentureId,
+            VentureCompleteUnix = retainer.VentureCompleteUnix,
+            VentureStatus = retainer.VentureStatus,
+            VentureEta = retainer.VentureEta,
+        };
+    }
+
+    private static RetainerListingEntry CloneRetainerListing(RetainerListingEntry listing)
+    {
+        return new RetainerListingEntry
+        {
+            RetainerId = listing.RetainerId,
+            RetainerName = listing.RetainerName,
+            SlotIndex = listing.SlotIndex,
+            ItemId = listing.ItemId,
+            ItemName = listing.ItemName,
+            Quantity = listing.Quantity,
+            IsHq = listing.IsHq,
+            UnitPrice = listing.UnitPrice,
+        };
+    }
+
+    private static RetainerInventoryItem CloneRetainerInventoryItem(RetainerInventoryItem item)
+    {
+        return new RetainerInventoryItem
+        {
+            RetainerId = item.RetainerId,
+            RetainerName = item.RetainerName,
+            ItemId = item.ItemId,
+            ItemName = item.ItemName,
+            Quantity = item.Quantity,
+            IsHq = item.IsHq,
+        };
+    }
+
     private void NormalizeCachedRetainerState()
     {
         var normalized = XaCharacterSnapshotRepository.NormalizeRetainerPayload(cachedRetainers, cachedListings, cachedRetainerItems);
         cachedRetainers = normalized.Retainers;
         cachedListings = normalized.Listings;
         cachedRetainerItems = normalized.RetainerItems;
+    }
+
+    private void NormalizeSaddlebagInventorySummariesFromItems()
+    {
+        var usedSlotsByContainer = cachedItems
+            .Where(item => IsSaddlebagContainerName(item.ContainerName))
+            .GroupBy(item => item.ContainerName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(item => item.SlotIndex).Distinct().Count(),
+                StringComparer.OrdinalIgnoreCase);
+
+        var existingSaddlebagSummaries = cachedInventory
+            .Where(summary => IsSaddlebagContainerName(summary.Name))
+            .ToDictionary(summary => summary.Name, CloneInventorySummary, StringComparer.OrdinalIgnoreCase);
+
+        if (usedSlotsByContainer.Count == 0 && existingSaddlebagSummaries.Count == 0)
+            return;
+
+        var mergedInventory = cachedInventory
+            .Where(summary => !IsSaddlebagContainerName(summary.Name))
+            .Select(CloneInventorySummary)
+            .ToList();
+
+        var saddlebagContainers = new HashSet<string>(SaddlebagContainerNames, StringComparer.OrdinalIgnoreCase);
+        saddlebagContainers.UnionWith(existingSaddlebagSummaries.Keys);
+        saddlebagContainers.UnionWith(usedSlotsByContainer.Keys);
+
+        foreach (var containerName in saddlebagContainers)
+        {
+            var hasExistingSummary = existingSaddlebagSummaries.TryGetValue(containerName, out var existingSummary);
+            var hasItemData = usedSlotsByContainer.TryGetValue(containerName, out var usedSlots);
+            if (!hasExistingSummary && !hasItemData)
+                continue;
+
+            mergedInventory.Add(new InventorySummary
+            {
+                Name = containerName,
+                UsedSlots = hasItemData ? usedSlots : existingSummary?.UsedSlots ?? 0,
+                TotalSlots = SaddlebagContainerSlotCount,
+            });
+        }
+
+        cachedInventory = mergedInventory;
     }
 
     private (string World, string Datacenter, string Region) ResolveStableWorldAndDatacenter(ulong contentId)
@@ -281,6 +456,7 @@ public partial class MainWindow
         cachedVoyages = null;
         FreeCompanyCollector.ClearPersistedValues();
         FcMemberCollector.ClearPersistedValues();
+        HousingCollector.ResetPersonalHousingState();
     }
 
     private List<ItemLocationResult> SearchSnapshotItemsByName(string searchText)
@@ -341,8 +517,13 @@ public partial class MainWindow
             return;
 
         var retainerListings = RetainerCollector.CollectActiveRetainerListings(Plugin.DataManager);
+        liveSessionRetainerListingIds.Add(activeRetainerId);
         cachedListings.RemoveAll(item => item.RetainerId == activeRetainerId);
         cachedListings.AddRange(retainerListings);
+
+        var activeRetainer = cachedRetainers.FirstOrDefault(item => item.RetainerId == activeRetainerId);
+        if (activeRetainer != null)
+            activeRetainer.MarketItemCount = (byte)Math.Clamp(retainerListings.Count, 0, byte.MaxValue);
     }
 
     private void MergeActiveRetainerInventory()
@@ -352,6 +533,7 @@ public partial class MainWindow
             return;
 
         var retainerInventory = RetainerCollector.CollectActiveRetainerInventory(Plugin.DataManager);
+        liveSessionRetainerInventoryIds.Add(activeRetainerId);
 
         var retainerName = cachedRetainers.FirstOrDefault(item => item.RetainerId == activeRetainerId)?.Name ?? string.Empty;
         var retainerInvItems = retainerInventory.Select(item => new RetainerInventoryItem

@@ -91,7 +91,7 @@ public partial class MainWindow : Window, IDisposable
     {
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(600, 450),
+            MinimumSize = new Vector2(300, 240),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue)
         };
 
@@ -286,6 +286,7 @@ public partial class MainWindow : Window, IDisposable
             cachedItems = itemCollection.Items;
             // Retainers: only overwrite if live collector returns data (requires summoning bell)
             var freshRetainers = RetainerCollector.CollectRetainerList();
+            hasAuthoritativeLiveRetainerList = freshRetainers.Count > 0;
             if (freshRetainers.Count > 0)
                 cachedRetainers = freshRetainers;
             MergeActiveRetainerListings();
@@ -342,6 +343,7 @@ public partial class MainWindow : Window, IDisposable
                 cachedRetainerItems.Clear();
             }
 
+            ApplyPersistedRetainerState(persistedSnapshot);
             ApplyPersistedSaddlebagState(persistedSnapshot, allowObservedSaddlebagClear: false);
             ApplyPersistedSaddlebagInventorySummaries(persistedSnapshot, allowObservedSaddlebagClear: false);
 
@@ -630,6 +632,7 @@ public partial class MainWindow : Window, IDisposable
             });
             MergeActiveRetainerListings();
             MergeActiveRetainerInventory();
+            ApplyPersistedRetainerState(persistedSnapshot);
             NormalizeCachedRetainerState();
             var retainerGil = GetRetainerGil();
             var gil = GetGil();
@@ -1085,6 +1088,105 @@ public partial class MainWindow : Window, IDisposable
         }
     }
 
+    private static bool IsDeleteModifierHeld()
+    {
+        var io = ImGui.GetIO();
+        return io.KeyCtrl && io.KeyShift;
+    }
+
+    private static void PushDeleteButtonColors(bool enabled)
+    {
+        var buttonColor = enabled
+            ? new Vector4(0.78f, 0.18f, 0.18f, 1.0f)
+            : new Vector4(0.35f, 0.12f, 0.12f, 0.55f);
+        var hoveredColor = enabled
+            ? new Vector4(0.90f, 0.26f, 0.26f, 1.0f)
+            : new Vector4(0.42f, 0.16f, 0.16f, 0.60f);
+        var activeColor = enabled
+            ? new Vector4(0.65f, 0.14f, 0.14f, 1.0f)
+            : new Vector4(0.30f, 0.10f, 0.10f, 0.55f);
+
+        ImGui.PushStyleColor(ImGuiCol.Button, ImGui.GetColorU32(buttonColor));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, ImGui.GetColorU32(hoveredColor));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, ImGui.GetColorU32(activeColor));
+    }
+
+    private static void PopDeleteButtonColors()
+    {
+        ImGui.PopStyleColor(3);
+    }
+
+    private bool TryGetCurrentDeleteTarget(out ulong contentId, out string characterLabel)
+    {
+        if (viewingContentId.HasValue)
+        {
+            contentId = viewingContentId.Value;
+            characterLabel = string.IsNullOrWhiteSpace(viewingCharName) ? contentId.ToString() : viewingCharName;
+            return true;
+        }
+
+        if (Plugin.PlayerState.IsLoaded)
+        {
+            contentId = Plugin.PlayerState.ContentId;
+            var characterName = Plugin.PlayerState.CharacterName.ToString();
+            var worldName = string.Empty;
+            try { worldName = Plugin.PlayerState.HomeWorld.Value.Name.ToString(); } catch { }
+            characterLabel = string.IsNullOrWhiteSpace(worldName) ? characterName : $"{characterName} @ {worldName}";
+            if (string.IsNullOrWhiteSpace(characterLabel))
+                characterLabel = contentId.ToString();
+            return contentId != 0;
+        }
+
+        contentId = 0;
+        characterLabel = string.Empty;
+        return false;
+    }
+
+    private bool DeleteCharacterSnapshot(ulong contentId, string characterLabel, out string errorMessage)
+    {
+        errorMessage = string.Empty;
+
+        try
+        {
+            plugin.CharacterRepo.Delete(contentId);
+
+            if (viewingContentId.HasValue && viewingContentId.Value == contentId)
+            {
+                viewingContentId = null;
+                selectedCharacterIndex = -1;
+                viewingCharName = string.Empty;
+                charSelectorSearch = string.Empty;
+
+                if (Plugin.PlayerState.IsLoaded)
+                    RefreshData();
+                else
+                    ResetCharacterScopedCache();
+            }
+
+            knownCharacters = plugin.CharacterRepo.GetAll();
+            selectedCharacterIndex = viewingContentId.HasValue
+                ? knownCharacters.FindIndex(c => c.ContentId == viewingContentId.Value)
+                : -1;
+            InvalidateDashboardSnapshotCache();
+            RefreshMigrationState();
+
+            Plugin.Log.Information($"[XA] Deleted character snapshot for {characterLabel} (cid={contentId}).");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+            Plugin.Log.Error($"[XA] Failed to delete character snapshot for {characterLabel} (cid={contentId}): {ex}");
+            return false;
+        }
+    }
+
+    private void SetSettingsStatus(string message)
+    {
+        settingsHousingStatus = message;
+        settingsHousingStatusExpiry = DateTime.UtcNow.AddSeconds(8);
+    }
+
     private void LoadCharacterFromDb(ulong contentId)
     {
         try
@@ -1256,10 +1358,6 @@ public partial class MainWindow : Window, IDisposable
         DrawStatusBar();
     }
 
-
-    // ───────────────────────────────────────────────
-    //  Status Bar
-    // ───────────────────────────────────────────────
     private void DrawStatusBar()
     {
         ImGui.TextDisabled($"XA Database v{PluginVersion}");
@@ -1315,6 +1413,14 @@ public partial class MainWindow : Window, IDisposable
                 ImGui.SameLine();
                 ImGui.TextDisabled($"Warnings: {lastSnapshotResult.Warnings.Count}");
             }
+        }
+
+        if (!string.IsNullOrEmpty(settingsHousingStatus) && DateTime.UtcNow < settingsHousingStatusExpiry)
+        {
+            ImGui.SameLine();
+            ImGui.TextDisabled("|");
+            ImGui.SameLine();
+            ImGui.TextColored(new Vector4(0.4f, 1.0f, 0.4f, 1.0f), settingsHousingStatus);
         }
     }
 }
