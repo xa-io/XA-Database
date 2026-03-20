@@ -126,7 +126,7 @@ public sealed class XaCharacterSnapshotRepository
         var resolvedDatacenter = ResolveDatacenter(resolvedWorld, datacenter);
         var resolvedRegion = ResolveRegion(resolvedWorld, region);
         var normalizedJobs = NormalizeJobs(jobs);
-        var normalizedRetainers = NormalizeRetainerPayload(retainers, listings, retainerItems);
+        var normalizedRetainers = NormalizeRetainerPayload(retainers, listings, retainerItems, contentId);
         var itemSections = BuildItemSections(items);
         var normalizedHousing = NormalizeHousingPayload(personalEstate, sharedEstates, apartment);
 
@@ -217,7 +217,8 @@ public sealed class XaCharacterSnapshotRepository
             var normalizedRetainers = NormalizeRetainerPayload(
                 DeserializeList<RetainerEntry>(GetRawProperty(root, "retainers", "[]")),
                 DeserializeList<RetainerListingEntry>(GetRawProperty(root, "listings", "[]")),
-                DeserializeList<RetainerInventoryItem>(GetRawProperty(root, "retainerItems", "[]")));
+                DeserializeList<RetainerInventoryItem>(GetRawProperty(root, "retainerItems", "[]")),
+                contentId);
             var itemSections = BuildItemSections(items);
             var resolvedValidationJson = GetRawProperty(root, "validation", string.IsNullOrWhiteSpace(validationJson) ? "{}" : validationJson);
 
@@ -396,7 +397,7 @@ public sealed class XaCharacterSnapshotRepository
                 .ToList();
         }
 
-        var normalizedRetainers = NormalizeRetainerPayload(snapshot.Retainers, snapshot.Listings, snapshot.RetainerItems);
+        var normalizedRetainers = NormalizeRetainerPayload(snapshot.Retainers, snapshot.Listings, snapshot.RetainerItems, row.ContentId);
         snapshot.Retainers = normalizedRetainers.Retainers;
         snapshot.Listings = normalizedRetainers.Listings;
         snapshot.RetainerItems = normalizedRetainers.RetainerItems;
@@ -421,15 +422,15 @@ public sealed class XaCharacterSnapshotRepository
             FcId = ReadUInt64(reader, "fc_id"),
             FcName = reader["fc_name"].ToString() ?? string.Empty,
             FcTag = reader["fc_tag"].ToString() ?? string.Empty,
-            FcPoints = Convert.ToInt32(reader["fc_points"]),
+            FcPoints = ReadInt32(reader, "fc_points"),
             FcEstate = reader["fc_estate"].ToString() ?? string.Empty,
             PersonalEstate = normalizedHousing.PersonalEstate,
             SharedEstates = normalizedHousing.SharedEstates,
             Apartment = normalizedHousing.Apartment,
-            Gil = Convert.ToInt32(reader["gil"]),
-            RetainerGil = Convert.ToInt32(reader["retainer_gil"]),
-            RetainerCount = Convert.ToInt32(reader["retainer_count"]),
-            HighestJobLevel = Convert.ToInt32(reader["highest_job_level"]),
+            Gil = ReadInt32(reader, "gil"),
+            RetainerGil = ReadInt32(reader, "retainer_gil"),
+            RetainerCount = ReadInt32(reader, "retainer_count"),
+            HighestJobLevel = ReadInt32(reader, "highest_job_level"),
             RetainerIdsJson = reader["retainer_ids_json"].ToString() ?? "[]",
             InventorySummariesJson = reader["inventory_summaries_json"].ToString() ?? "[]",
             FreshnessJson = reader["freshness_json"].ToString() ?? "{}",
@@ -453,11 +454,11 @@ public sealed class XaCharacterSnapshotRepository
             SquadronJson = reader["squadron_json"].ToString() ?? "null",
             VoyagesJson = reader["voyages_json"].ToString() ?? "null",
             ValidationJson = reader["validation_json"].ToString() ?? "{}",
-            SnapshotVersion = Convert.ToInt32(reader["snapshot_version"]),
+            SnapshotVersion = ReadInt32(reader, "snapshot_version", 1),
             ExportedUtc = reader["exported_utc"].ToString() ?? string.Empty,
             Trigger = reader["trigger"].ToString() ?? string.Empty,
             TriggerDetail = reader["trigger_detail"].ToString() ?? string.Empty,
-            ImportedFromLegacy = Convert.ToInt32(reader["imported_from_legacy"]) == 1,
+            ImportedFromLegacy = ReadInt32(reader, "imported_from_legacy") == 1,
             UpdatedUtc = reader["updated_utc"].ToString() ?? string.Empty,
         };
     }
@@ -510,10 +511,13 @@ public sealed class XaCharacterSnapshotRepository
     public static (List<RetainerEntry> Retainers, List<RetainerListingEntry> Listings, List<RetainerInventoryItem> RetainerItems) NormalizeRetainerPayload(
         IEnumerable<RetainerEntry> retainers,
         IEnumerable<RetainerListingEntry> listings,
-        IEnumerable<RetainerInventoryItem> retainerItems)
+        IEnumerable<RetainerInventoryItem> retainerItems,
+        ulong expectedOwnerContentId = 0)
     {
         var normalizedRetainers = retainers
             .Where(retainer => retainer != null && retainer.RetainerId != 0)
+            .Select(retainer => StampRetainerOwnerContentId(retainer, expectedOwnerContentId))
+            .Where(retainer => expectedOwnerContentId == 0 || retainer.OwnerContentId == expectedOwnerContentId)
             .GroupBy(retainer => retainer.RetainerId)
             .Select(group => group
                 .OrderByDescending(GetRetainerCompletenessScore)
@@ -556,10 +560,38 @@ public sealed class XaCharacterSnapshotRepository
         return (normalizedRetainers, normalizedListings, normalizedRetainerItems);
     }
 
+    public static string BuildRetainerOwnerReferencesJson(IEnumerable<RetainerEntry> retainers, ulong expectedOwnerContentId = 0)
+    {
+        var normalizedRetainers = NormalizeRetainerPayload(
+            retainers,
+            Enumerable.Empty<RetainerListingEntry>(),
+            Enumerable.Empty<RetainerInventoryItem>(),
+            expectedOwnerContentId).Retainers;
+
+        var ownerReferences = normalizedRetainers
+            .Select(retainer => new RetainerOwnerReference
+            {
+                RetainerId = retainer.RetainerId,
+                OwnerContentId = retainer.OwnerContentId,
+            })
+            .ToList();
+
+        return Serialize(ownerReferences, "[]");
+    }
+
+    private static RetainerEntry StampRetainerOwnerContentId(RetainerEntry retainer, ulong expectedOwnerContentId)
+    {
+        if (retainer.OwnerContentId == 0 && expectedOwnerContentId != 0)
+            retainer.OwnerContentId = expectedOwnerContentId;
+
+        return retainer;
+    }
+
     private static int GetRetainerCompletenessScore(RetainerEntry retainer)
     {
         var score = 0;
         if (!string.IsNullOrWhiteSpace(retainer.Name)) score += 8;
+        if (retainer.OwnerContentId > 0) score += 4;
         if (retainer.Level > 0) score += 4;
         if (retainer.ClassJob > 0) score += 4;
         if (retainer.ItemCount > 0) score += 2;
@@ -856,7 +888,52 @@ public sealed class XaCharacterSnapshotRepository
         if (value == null || value == DBNull.Value)
             return 0;
 
-        return (ulong)Convert.ToInt64(value);
+        if (value is string textValue)
+        {
+            if (string.IsNullOrWhiteSpace(textValue))
+                return 0;
+
+            if (ulong.TryParse(textValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedTextValue))
+                return parsedTextValue;
+
+            return 0;
+        }
+
+        try
+        {
+            return Convert.ToUInt64(value, CultureInfo.InvariantCulture);
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    private static int ReadInt32(SqliteDataReader reader, string columnName, int fallback = 0)
+    {
+        var value = reader[columnName];
+        if (value == null || value == DBNull.Value)
+            return fallback;
+
+        if (value is string textValue)
+        {
+            if (string.IsNullOrWhiteSpace(textValue))
+                return fallback;
+
+            if (int.TryParse(textValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedTextValue))
+                return parsedTextValue;
+
+            return fallback;
+        }
+
+        try
+        {
+            return Convert.ToInt32(value, CultureInfo.InvariantCulture);
+        }
+        catch
+        {
+            return fallback;
+        }
     }
 }
 

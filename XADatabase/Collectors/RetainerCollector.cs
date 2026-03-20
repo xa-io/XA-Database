@@ -27,7 +27,7 @@ public static class RetainerCollector
         InventoryType.RetainerPage7,
     };
 
-    public static unsafe List<RetainerEntry> CollectRetainerList()
+    public static unsafe List<RetainerEntry> CollectRetainerList(ulong ownerContentId = 0)
     {
         var results = new List<RetainerEntry>();
 
@@ -76,6 +76,7 @@ public static class RetainerCollector
 
             results.Add(new RetainerEntry
             {
+                OwnerContentId = ownerContentId,
                 RetainerId = retainer->RetainerId,
                 Name = retainer->NameString,
                 ClassJob = retainer->ClassJob,

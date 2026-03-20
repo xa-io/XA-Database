@@ -51,7 +51,7 @@ public partial class MainWindow
         liveSessionRetainerInventoryIds.Clear();
         hasAuthoritativeLiveRetainerList = false;
         NormalizeSaddlebagInventorySummariesFromItems();
-        NormalizeCachedRetainerState();
+        NormalizeCachedRetainerState(snapshot.Row.ContentId);
 
         if (cachedFc != null)
             FreeCompanyCollector.SeedPersistedValues(cachedFc.FcPoints, cachedFc.Estate, cachedFc.Name, cachedFc.Tag, cachedFc.Rank);
@@ -81,6 +81,7 @@ public partial class MainWindow
         liveSessionRetainerListingIds.Clear();
         liveSessionRetainerInventoryIds.Clear();
         hasAuthoritativeLiveRetainerList = false;
+        lastLiveContentId = 0;
         DataCollected = false;
         lastRefreshTime = DateTime.MinValue;
         FreeCompanyCollector.ClearPersistedValues();
@@ -314,6 +315,7 @@ public partial class MainWindow
     {
         return new RetainerEntry
         {
+            OwnerContentId = retainer.OwnerContentId,
             RetainerId = retainer.RetainerId,
             Name = retainer.Name,
             ClassJob = retainer.ClassJob,
@@ -357,9 +359,9 @@ public partial class MainWindow
         };
     }
 
-    private void NormalizeCachedRetainerState()
+    private void NormalizeCachedRetainerState(ulong expectedOwnerContentId = 0)
     {
-        var normalized = XaCharacterSnapshotRepository.NormalizeRetainerPayload(cachedRetainers, cachedListings, cachedRetainerItems);
+        var normalized = XaCharacterSnapshotRepository.NormalizeRetainerPayload(cachedRetainers, cachedListings, cachedRetainerItems, expectedOwnerContentId);
         cachedRetainers = normalized.Retainers;
         cachedListings = normalized.Listings;
         cachedRetainerItems = normalized.RetainerItems;

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -904,13 +905,13 @@ public sealed class DatabaseService : IDisposable
                 Datacenter = reader["datacenter"].ToString() ?? string.Empty,
                 FcName = reader["fc_name"].ToString() ?? string.Empty,
                 FcTag = reader["fc_tag"].ToString() ?? string.Empty,
-                FcPoints = Convert.ToInt32(reader["fc_points"]),
+                FcPoints = ReadSqliteInt32(reader, "fc_points"),
                 FcEstate = reader["fc_estate"].ToString() ?? string.Empty,
                 PersonalEstate = reader["personal_estate"].ToString() ?? string.Empty,
                 Apartment = reader["apartment"].ToString() ?? string.Empty,
-                Gil = Convert.ToInt32(reader["gil"]),
-                RetainerGil = Convert.ToInt32(reader["retainer_gil"]),
-                RetainerCount = Convert.ToInt32(reader["retainer_count"]),
+                Gil = ReadSqliteInt32(reader, "gil"),
+                RetainerGil = ReadSqliteInt32(reader, "retainer_gil"),
+                RetainerCount = ReadSqliteInt32(reader, "retainer_count"),
                 RetainerIdsJson = reader["retainer_ids_json"].ToString() ?? "[]",
                 ValidationJson = reader["validation_json"].ToString() ?? "{}",
                 FreshnessJson = reader["freshness_json"].ToString() ?? "{}",
@@ -918,7 +919,7 @@ public sealed class DatabaseService : IDisposable
                 UpdatedUtc = reader["updated_utc"].ToString() ?? string.Empty,
                 Trigger = reader["trigger"].ToString() ?? string.Empty,
                 TriggerDetail = reader["trigger_detail"].ToString() ?? string.Empty,
-                ImportedFromLegacy = Convert.ToInt32(reader["imported_from_legacy"]) == 1,
+                ImportedFromLegacy = ReadSqliteInt32(reader, "imported_from_legacy") == 1,
             });
         }
 
@@ -972,7 +973,7 @@ public sealed class DatabaseService : IDisposable
                 legacyRow.RetainerGil,
                 normalizedRetainers.Count,
                 XaCharacterSnapshotRepository.GetHighestJobLevel(jobs),
-                JsonSerializer.Serialize(normalizedRetainers.Select(retainer => retainer.RetainerId).Distinct()),
+                XaCharacterSnapshotRepository.BuildRetainerOwnerReferencesJson(normalizedRetainers, legacyRow.ContentId),
                 legacyRow.FreshnessJson,
                 sections,
                 snapshotVersion,
@@ -1086,6 +1087,33 @@ public sealed class DatabaseService : IDisposable
         }
 
         return fallback;
+    }
+
+    private static int ReadSqliteInt32(SqliteDataReader reader, string columnName, int fallback = 0)
+    {
+        var value = reader[columnName];
+        if (value == null || value == DBNull.Value)
+            return fallback;
+
+        if (value is string textValue)
+        {
+            if (string.IsNullOrWhiteSpace(textValue))
+                return fallback;
+
+            if (int.TryParse(textValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedTextValue))
+                return parsedTextValue;
+
+            return fallback;
+        }
+
+        try
+        {
+            return Convert.ToInt32(value, CultureInfo.InvariantCulture);
+        }
+        catch
+        {
+            return fallback;
+        }
     }
 
     private static long ToSqliteInteger(ulong value)

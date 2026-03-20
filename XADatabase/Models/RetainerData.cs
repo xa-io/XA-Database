@@ -4,6 +4,7 @@ namespace XADatabase.Models;
 
 public class RetainerEntry
 {
+    public ulong OwnerContentId { get; set; }
     public ulong RetainerId { get; set; }
     public string Name { get; set; } = string.Empty;
     public byte ClassJob { get; set; }
@@ -16,6 +17,12 @@ public class RetainerEntry
     public uint VentureCompleteUnix { get; set; }
     public string VentureStatus { get; set; } = string.Empty;
     public string VentureEta { get; set; } = string.Empty;
+}
+
+public class RetainerOwnerReference
+{
+    public ulong RetainerId { get; set; }
+    public ulong OwnerContentId { get; set; }
 }
 
 public class RetainerInventoryItem

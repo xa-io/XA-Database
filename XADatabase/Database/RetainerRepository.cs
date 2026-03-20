@@ -25,6 +25,7 @@ public class RetainerRepository
         {
             foreach (var r in retainers)
             {
+                var ownerContentId = r.OwnerContentId != 0 ? r.OwnerContentId : contentId;
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = @"
                     INSERT INTO retainers (retainer_id, content_id, name, class_job, level, gil, item_count, market_item_count, town, venture_id, venture_complete_unix, venture_status, venture_eta, updated_utc)
@@ -44,7 +45,7 @@ public class RetainerRepository
                         venture_eta = @veta,
                         updated_utc = @now";
                 cmd.Parameters.AddWithValue("@rid", (long)r.RetainerId);
-                cmd.Parameters.AddWithValue("@cid", (long)contentId);
+                cmd.Parameters.AddWithValue("@cid", (long)ownerContentId);
                 cmd.Parameters.AddWithValue("@name", r.Name);
                 cmd.Parameters.AddWithValue("@cj", (int)r.ClassJob);
                 cmd.Parameters.AddWithValue("@lvl", (int)r.Level);
@@ -84,6 +85,7 @@ public class RetainerRepository
         {
             results.Add(new RetainerEntry
             {
+                OwnerContentId = contentId,
                 RetainerId = (ulong)(long)reader["retainer_id"],
                 Name = reader["name"].ToString() ?? "",
                 ClassJob = (byte)Convert.ToInt32(reader["class_job"]),

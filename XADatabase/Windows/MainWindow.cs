@@ -44,6 +44,7 @@ public partial class MainWindow : Window, IDisposable
     private string cachedPersonalEstate = string.Empty;
     private string cachedSharedEstates = string.Empty;
     private string cachedApartment = string.Empty;
+    private ulong lastLiveContentId;
     public bool DataCollected { get; private set; }
     private bool charListQueried;
 
@@ -251,7 +252,10 @@ public partial class MainWindow : Window, IDisposable
             var contentId = playerState.ContentId;
             var snapshot = plugin.SnapshotRepo.GetSnapshot(contentId);
             if (snapshot != null)
+            {
                 ApplySnapshotToCache(snapshot);
+                lastLiveContentId = contentId;
+            }
 
             Plugin.Log.Information("[XA] Seeded cached data from database for current character.");
         }
@@ -266,6 +270,9 @@ public partial class MainWindow : Window, IDisposable
         var playerState = Plugin.PlayerState;
         if (!playerState.IsLoaded)
             return;
+
+        if (lastLiveContentId != 0 && lastLiveContentId != playerState.ContentId)
+            ResetCharacterScopedCache();
 
         var localPlayer = Plugin.ObjectTable.LocalPlayer;
         var isOnHomeworld = localPlayer == null || localPlayer.CurrentWorld.RowId == localPlayer.HomeWorld.RowId;
@@ -285,7 +292,7 @@ public partial class MainWindow : Window, IDisposable
                 lastLoadedItemContainers.Add(containerName);
             cachedItems = itemCollection.Items;
             // Retainers: only overwrite if live collector returns data (requires summoning bell)
-            var freshRetainers = RetainerCollector.CollectRetainerList();
+            var freshRetainers = RetainerCollector.CollectRetainerList(playerState.ContentId);
             hasAuthoritativeLiveRetainerList = freshRetainers.Count > 0;
             if (freshRetainers.Count > 0)
                 cachedRetainers = freshRetainers;
@@ -454,9 +461,10 @@ public partial class MainWindow : Window, IDisposable
             // The collector already validates sentinel data, so empty = character doesn't own that type.
             // Stale DB data is cleared on save.
 
-            NormalizeCachedRetainerState();
+            NormalizeCachedRetainerState(playerState.ContentId);
 
             lastRefreshTime = DateTime.UtcNow;
+            lastLiveContentId = playerState.ContentId;
             DataCollected = true;
 
             // Reset character selector to current character
@@ -633,7 +641,7 @@ public partial class MainWindow : Window, IDisposable
             MergeActiveRetainerListings();
             MergeActiveRetainerInventory();
             ApplyPersistedRetainerState(persistedSnapshot);
-            NormalizeCachedRetainerState();
+            NormalizeCachedRetainerState(contentId);
             var retainerGil = GetRetainerGil();
             var gil = GetGil();
             var sections = XaCharacterSnapshotRepository.BuildSections(
@@ -662,7 +670,7 @@ public partial class MainWindow : Window, IDisposable
                 cachedQuests,
                 cachedMsqMilestones,
                 validationJson);
-            var normalizedRetainers = XaCharacterSnapshotRepository.NormalizeRetainerPayload(cachedRetainers, cachedListings, cachedRetainerItems);
+            var normalizedRetainers = XaCharacterSnapshotRepository.NormalizeRetainerPayload(cachedRetainers, cachedListings, cachedRetainerItems, contentId);
 
             plugin.DatabaseService.BeginTransaction();
             try
@@ -685,7 +693,7 @@ public partial class MainWindow : Window, IDisposable
                     retainerGil,
                     normalizedRetainers.Retainers.Count,
                     XaCharacterSnapshotRepository.GetHighestJobLevel(cachedJobs),
-                    JsonSerializer.Serialize(normalizedRetainers.Retainers.Select(r => r.RetainerId).Distinct()),
+                    XaCharacterSnapshotRepository.BuildRetainerOwnerReferencesJson(normalizedRetainers.Retainers, contentId),
                     freshnessJson,
                     sections,
                     1,
@@ -933,7 +941,7 @@ public partial class MainWindow : Window, IDisposable
                         quests,
                         msq,
                         validationJson);
-                    var normalizedRetainers = XaCharacterSnapshotRepository.NormalizeRetainerPayload(retainers, listings, retainerItems);
+                    var normalizedRetainers = XaCharacterSnapshotRepository.NormalizeRetainerPayload(retainers, listings, retainerItems, character.ContentId);
 
                     plugin.DatabaseService.UpsertXaCharacterSnapshot(
                         character.ContentId,
@@ -953,12 +961,12 @@ public partial class MainWindow : Window, IDisposable
                         safeRetainerGil,
                         normalizedRetainers.Retainers.Count,
                         XaCharacterSnapshotRepository.GetHighestJobLevel(jobs),
-                        JsonSerializer.Serialize(normalizedRetainers.Retainers.Select(r => r.RetainerId).Distinct()),
+                        XaCharacterSnapshotRepository.BuildRetainerOwnerReferencesJson(normalizedRetainers.Retainers, character.ContentId),
                         JsonSerializer.Serialize(new
                         {
-                            savedAtUtc = exportedUtc,
-                            trigger = SnapshotTrigger.LegacyImport.ToString(),
-                            importedFromLegacy = true
+                            exportedUtc,
+                            importedFromLegacy = true,
+                            source = "legacy_import"
                         }),
                         sections,
                         1,
@@ -1019,6 +1027,7 @@ public partial class MainWindow : Window, IDisposable
             cachedSharedEstates = string.Empty;
             cachedApartment = string.Empty;
             DataCollected = false;
+            lastLiveContentId = 0;
             viewingContentId = null;
             selectedCharacterIndex = -1;
             viewingCharName = string.Empty;
