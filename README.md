@@ -48,12 +48,6 @@ This means that there are still features being implemented and enhanced. Suggest
 5. Click **Save**.
 6. Open the plugin installer with `/xlplugins`, go to **All Plugins**, and search for **XA Database**.
 
-## Developer Notes
-
-- Retainer snapshots now persist an `OwnerContentId` for each retainer and in `retainer_ids_json` so saved retainer state can be filtered against the correct character after character switches.
-- Release builds sanitize stack trace paths to `/_/XADatabase/...` to protect local developer paths.
-- Dashboard snapshot loading is hardened against malformed legacy numeric columns.
-
 ## Support
 
 - Discord server: <https://discord.gg/g2NmYxPQCa>
