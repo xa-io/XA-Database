@@ -97,7 +97,7 @@ public partial class MainWindow
         }
 
         // ── Totals row ──
-        uint totalRetainerGil = 0;
+        long totalRetainerGil = 0;
         foreach (var r in cachedRetainers)
             totalRetainerGil += r.Gil;
 

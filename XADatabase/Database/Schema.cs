@@ -3,6 +3,7 @@
 public static class Schema
 {
     public const int CurrentVersion = 19;
+    public const int CurrentSnapshotVersion = 2;
 
     public static readonly string[] CreateStatements =
     {
@@ -25,7 +26,7 @@ public static class Schema
             shared_estates TEXT NOT NULL DEFAULT '',
             apartment TEXT NOT NULL DEFAULT '',
             gil INTEGER NOT NULL DEFAULT 0,
-            retainer_gil INTEGER NOT NULL DEFAULT 0,
+            retainer_gil BIGINT NOT NULL DEFAULT 0,
             retainer_count INTEGER NOT NULL DEFAULT 0,
             highest_job_level INTEGER NOT NULL DEFAULT 0,
             retainer_ids_json TEXT NOT NULL DEFAULT '[]',
@@ -51,7 +52,7 @@ public static class Schema
             squadron_json TEXT NOT NULL DEFAULT 'null',
             voyages_json TEXT NOT NULL DEFAULT 'null',
             validation_json TEXT NOT NULL DEFAULT '{}',
-            snapshot_version INTEGER NOT NULL DEFAULT 1,
+            snapshot_version INTEGER NOT NULL DEFAULT " + CurrentSnapshotVersion + @",
             exported_utc TEXT NOT NULL DEFAULT '',
             trigger TEXT NOT NULL DEFAULT '',
             trigger_detail TEXT NOT NULL DEFAULT '',

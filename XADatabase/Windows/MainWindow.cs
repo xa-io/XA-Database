@@ -121,9 +121,14 @@ public partial class MainWindow : Window, IDisposable
     }
 
     /// <summary>Returns total gil across all cached retainers.</summary>
-    public int GetRetainerGil()
+    public long GetRetainerGil()
     {
-        return cachedRetainers.Count > 0 ? (int)cachedRetainers.Sum(r => r.Gil) : 0;
+        return GetRetainerGilValue();
+    }
+
+    private long GetRetainerGilValue()
+    {
+        return cachedRetainers.Count > 0 ? cachedRetainers.Sum(r => (long)r.Gil) : 0L;
     }
 
     public string GetFcName()
@@ -182,7 +187,7 @@ public partial class MainWindow : Window, IDisposable
                 contentId,
                 characterName,
                 gil = GetGil(),
-                retainerGil = GetRetainerGil(),
+                retainerGil = GetRetainerGilValue(),
                 retainerCount = cachedRetainers.Count,
                 fcName = GetFcName(),
                 fcTag = GetFcTag(),
@@ -642,7 +647,7 @@ public partial class MainWindow : Window, IDisposable
             MergeActiveRetainerInventory();
             ApplyPersistedRetainerState(persistedSnapshot);
             NormalizeCachedRetainerState(contentId);
-            var retainerGil = GetRetainerGil();
+            var retainerGil = GetRetainerGilValue();
             var gil = GetGil();
             var sections = XaCharacterSnapshotRepository.BuildSections(
                 contentId,
@@ -696,7 +701,7 @@ public partial class MainWindow : Window, IDisposable
                     XaCharacterSnapshotRepository.BuildRetainerOwnerReferencesJson(normalizedRetainers.Retainers, contentId),
                     freshnessJson,
                     sections,
-                    1,
+                    Schema.CurrentSnapshotVersion,
                     savedAtUtc,
                     trigger.ToString(),
                     triggerDetail,
@@ -805,7 +810,7 @@ public partial class MainWindow : Window, IDisposable
     {
         var snapshot = new
         {
-            snapshotVersion = 1,
+            snapshotVersion = Schema.CurrentSnapshotVersion,
             exportedUtc = savedAtUtc,
             importedFromLegacy,
             trigger = trigger.ToString(),
@@ -820,7 +825,7 @@ public partial class MainWindow : Window, IDisposable
                 sharedEstates = cachedSharedEstates,
                 apartment = cachedApartment,
                 gil = GetGil(),
-                retainerGil = GetRetainerGil(),
+                retainerGil = GetRetainerGilValue(),
             },
             freeCompany = cachedFc,
             fcMembers = cachedFcMembers,
@@ -898,7 +903,6 @@ public partial class MainWindow : Window, IDisposable
                     var gil = currencies.Find(c => c.Name == "Gil")?.Amount ?? 0;
                     var retainerGil = retainers.Sum(r => (long)r.Gil);
                     var safeGil = (int)Math.Min(int.MaxValue, gil);
-                    var safeRetainerGil = (int)Math.Min(int.MaxValue, retainerGil);
                     var exportedUtc = string.IsNullOrWhiteSpace(character.LastSeenUtc) ? DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss") : character.LastSeenUtc;
                     var validation = new CollectorValidationSummary
                     {
@@ -925,7 +929,7 @@ public partial class MainWindow : Window, IDisposable
                         character.SharedEstates,
                         character.Apartment,
                         safeGil,
-                        safeRetainerGil,
+                        retainerGil,
                         currencies,
                         jobs,
                         inventory,
@@ -958,7 +962,7 @@ public partial class MainWindow : Window, IDisposable
                         character.SharedEstates,
                         character.Apartment,
                         safeGil,
-                        safeRetainerGil,
+                        retainerGil,
                         normalizedRetainers.Retainers.Count,
                         XaCharacterSnapshotRepository.GetHighestJobLevel(jobs),
                         XaCharacterSnapshotRepository.BuildRetainerOwnerReferencesJson(normalizedRetainers.Retainers, character.ContentId),
@@ -969,7 +973,7 @@ public partial class MainWindow : Window, IDisposable
                             source = "legacy_import"
                         }),
                         sections,
-                        1,
+                        Schema.CurrentSnapshotVersion,
                         exportedUtc,
                         SnapshotTrigger.LegacyImport.ToString(),
                         "Legacy table import",
@@ -1456,7 +1460,7 @@ public sealed class SaveSnapshotResult
     public string TriggerDetail { get; init; } = string.Empty;
     public string SavedAtUtc { get; init; } = string.Empty;
     public int Gil { get; init; }
-    public int RetainerGil { get; init; }
+    public long RetainerGil { get; init; }
     public int RetainerCount { get; init; }
     public bool SavedFreeCompany { get; init; }
     public bool SavedVoyages { get; init; }

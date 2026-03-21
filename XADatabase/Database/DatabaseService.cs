@@ -157,8 +157,9 @@ public sealed class DatabaseService : IDisposable
         var needsRegionUpgrade = TableExists("xa_characters") && !ColumnExists("xa_characters", "region");
         var needsSharedEstatesUpgrade = TableExists("xa_characters") && !ColumnExists("xa_characters", "shared_estates");
         var needsLegacyCleanup = GetXaCharacterCount() > 0 && HasLegacyTables();
+        var needsRetainerGilRepair = TableExists("xa_characters") && HasNegativeRetainerGilRows();
 
-        if (currentVersion >= Schema.CurrentVersion && !needsXaUpgrade && !needsRegionUpgrade && !needsSharedEstatesUpgrade && !needsLegacyCleanup)
+        if (currentVersion >= Schema.CurrentVersion && !needsXaUpgrade && !needsRegionUpgrade && !needsSharedEstatesUpgrade && !needsLegacyCleanup && !needsRetainerGilRepair)
         {
             Plugin.Log.Information($"[XA] Database schema is up to date (v{currentVersion}).");
             return;
@@ -227,6 +228,9 @@ public sealed class DatabaseService : IDisposable
 
             if (GetXaCharacterCount() > 0 && HasLegacyTables())
                 DropLegacyTablesInternal(conn, transaction);
+
+            if (needsXaUpgrade || needsRetainerGilRepair)
+                RepairNegativeRetainerGilRows(conn, transaction);
 
             UpsertSchemaVersion(conn, transaction);
 
@@ -351,7 +355,7 @@ public sealed class DatabaseService : IDisposable
         string sharedEstates,
         string apartment,
         int gil,
-        int retainerGil,
+        long retainerGil,
         int retainerCount,
         int highestJobLevel,
         string retainerIdsJson,
@@ -879,6 +883,101 @@ public sealed class DatabaseService : IDisposable
         ExecuteNonQuery(conn, transaction, "ALTER TABLE xa_characters ADD COLUMN shared_estates TEXT NOT NULL DEFAULT ''");
     }
 
+    private bool HasNegativeRetainerGilRows()
+    {
+        if (!TableExists("xa_characters"))
+            return false;
+
+        var conn = GetConnection();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM xa_characters WHERE retainer_gil < 0 LIMIT 1";
+        return cmd.ExecuteScalar() != null;
+    }
+
+    private void RepairNegativeRetainerGilRows(SqliteConnection conn, SqliteTransaction transaction)
+    {
+        if (!TableExists("xa_characters"))
+            return;
+
+        var repairs = new List<(long ContentId, string CharacterName, string World, string Datacenter, string Region, string PersonalEstate, string SharedEstates, string Apartment, int Gil, long RetainerGil)>();
+
+        using var selectCmd = conn.CreateCommand();
+        selectCmd.Transaction = transaction;
+        selectCmd.CommandText = @"
+            SELECT content_id,
+                   character_name,
+                   world,
+                   datacenter,
+                   region,
+                   personal_estate,
+                   shared_estates,
+                   apartment,
+                   gil,
+                   retainers_json
+            FROM xa_characters
+            WHERE retainer_gil < 0";
+        using var reader = selectCmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var contentId = (long)reader["content_id"];
+            var retainers = XaCharacterSnapshotRepository.NormalizeRetainerPayload(
+                DeserializeList<RetainerEntry>(reader["retainers_json"].ToString() ?? "[]"),
+                Enumerable.Empty<RetainerListingEntry>(),
+                Enumerable.Empty<RetainerInventoryItem>(),
+                (ulong)contentId).Retainers;
+            var repairedRetainerGil = retainers.Sum(retainer => (long)retainer.Gil);
+            if (repairedRetainerGil <= 0)
+                continue;
+
+            repairs.Add((
+                ContentId: contentId,
+                CharacterName: reader["character_name"].ToString() ?? string.Empty,
+                World: reader["world"].ToString() ?? string.Empty,
+                Datacenter: reader["datacenter"].ToString() ?? string.Empty,
+                Region: reader["region"].ToString() ?? string.Empty,
+                PersonalEstate: reader["personal_estate"].ToString() ?? string.Empty,
+                SharedEstates: reader["shared_estates"].ToString() ?? string.Empty,
+                Apartment: reader["apartment"].ToString() ?? string.Empty,
+                Gil: ReadSqliteInt32(reader, "gil"),
+                RetainerGil: repairedRetainerGil));
+        }
+
+        reader.Close();
+
+        foreach (var repair in repairs)
+        {
+            var normalizedHousing = XaCharacterSnapshotRepository.NormalizeHousingPayload(repair.PersonalEstate, repair.SharedEstates, repair.Apartment);
+            var characterJson = JsonSerializer.Serialize(new
+            {
+                contentId = (ulong)repair.ContentId,
+                name = repair.CharacterName,
+                world = repair.World,
+                datacenter = XaCharacterSnapshotRepository.ResolveDatacenter(repair.World, repair.Datacenter),
+                region = XaCharacterSnapshotRepository.ResolveRegion(repair.World, repair.Region),
+                personalEstate = normalizedHousing.PersonalEstate,
+                sharedEstates = normalizedHousing.SharedEstates,
+                apartment = normalizedHousing.Apartment,
+                gil = repair.Gil,
+                retainerGil = repair.RetainerGil,
+            });
+
+            using var updateCmd = conn.CreateCommand();
+            updateCmd.Transaction = transaction;
+            updateCmd.CommandText = @"
+                UPDATE xa_characters
+                SET retainer_gil = @retainer_gil,
+                    character_json = @character_json
+                WHERE content_id = @cid";
+            updateCmd.Parameters.AddWithValue("@cid", repair.ContentId);
+            updateCmd.Parameters.AddWithValue("@retainer_gil", repair.RetainerGil);
+            updateCmd.Parameters.AddWithValue("@character_json", characterJson);
+            updateCmd.ExecuteNonQuery();
+        }
+
+        if (repairs.Count > 0)
+            Plugin.Log.Information($"[XA] Repaired negative retainer_gil for {repairs.Count} xa_characters row(s).");
+    }
+
     private bool HasLegacyTables() => LegacyTables.Any(TableExists);
 
     private void UpgradeXaCharactersTable(SqliteConnection conn, SqliteTransaction transaction)
@@ -910,7 +1009,7 @@ public sealed class DatabaseService : IDisposable
                 PersonalEstate = reader["personal_estate"].ToString() ?? string.Empty,
                 Apartment = reader["apartment"].ToString() ?? string.Empty,
                 Gil = ReadSqliteInt32(reader, "gil"),
-                RetainerGil = ReadSqliteInt32(reader, "retainer_gil"),
+                RetainerGil = ReadSqliteInt64(reader, "retainer_gil"),
                 RetainerCount = ReadSqliteInt32(reader, "retainer_count"),
                 RetainerIdsJson = reader["retainer_ids_json"].ToString() ?? "[]",
                 ValidationJson = reader["validation_json"].ToString() ?? "{}",
@@ -936,7 +1035,7 @@ public sealed class DatabaseService : IDisposable
                 ? ReadLegacySnapshotString(legacyRow.SnapshotJson, "triggerDetail", string.Empty)
                 : legacyRow.TriggerDetail;
             var importedFromLegacy = legacyRow.ImportedFromLegacy || ReadLegacySnapshotBool(legacyRow.SnapshotJson, "importedFromLegacy", false);
-            var snapshotVersion = ReadLegacySnapshotInt(legacyRow.SnapshotJson, "snapshotVersion", 1);
+            var snapshotVersion = ReadLegacySnapshotInt(legacyRow.SnapshotJson, "snapshotVersion", Schema.CurrentSnapshotVersion);
             var exportedUtc = ReadLegacySnapshotString(legacyRow.SnapshotJson, "exportedUtc", legacyRow.UpdatedUtc);
             var sections = XaCharacterSnapshotRepository.BuildSectionsFromLegacySnapshotJson(
                 legacyRow.SnapshotJson,
@@ -1066,6 +1165,29 @@ public sealed class DatabaseService : IDisposable
         return fallback;
     }
 
+    private static long ReadLegacySnapshotInt64(string snapshotJson, string propertyName, long fallback)
+    {
+        if (string.IsNullOrWhiteSpace(snapshotJson))
+            return fallback;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(snapshotJson);
+            if (doc.RootElement.TryGetProperty(propertyName, out var value))
+            {
+                if (value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var number))
+                    return number;
+                if (value.ValueKind == JsonValueKind.String && long.TryParse(value.GetString(), out number))
+                    return number;
+            }
+        }
+        catch
+        {
+        }
+
+        return fallback;
+    }
+
     private static bool ReadLegacySnapshotBool(string snapshotJson, string propertyName, bool fallback)
     {
         if (string.IsNullOrWhiteSpace(snapshotJson))
@@ -1116,6 +1238,33 @@ public sealed class DatabaseService : IDisposable
         }
     }
 
+    private static long ReadSqliteInt64(SqliteDataReader reader, string columnName, long fallback = 0)
+    {
+        var value = reader[columnName];
+        if (value == null || value == DBNull.Value)
+            return fallback;
+
+        if (value is string textValue)
+        {
+            if (string.IsNullOrWhiteSpace(textValue))
+                return fallback;
+
+            if (long.TryParse(textValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedTextValue))
+                return parsedTextValue;
+
+            return fallback;
+        }
+
+        try
+        {
+            return Convert.ToInt64(value, CultureInfo.InvariantCulture);
+        }
+        catch
+        {
+            return fallback;
+        }
+    }
+
     private static long ToSqliteInteger(ulong value)
     {
         return value > long.MaxValue ? long.MaxValue : (long)value;
@@ -1135,7 +1284,7 @@ internal sealed class LegacyXaCharacterMigrationRow
     public string PersonalEstate { get; init; } = string.Empty;
     public string Apartment { get; init; } = string.Empty;
     public int Gil { get; init; }
-    public int RetainerGil { get; init; }
+    public long RetainerGil { get; init; }
     public int RetainerCount { get; init; }
     public string RetainerIdsJson { get; init; } = "[]";
     public string ValidationJson { get; init; } = "{}";

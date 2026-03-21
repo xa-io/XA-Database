@@ -17,7 +17,7 @@ namespace XADatabase.Services;
 ///   XA.Database.GetVersion        (Func → string)  — Plugin version string
 ///   XA.Database.GetCharacterName  (Func → string)  — Current character name
 ///   XA.Database.GetGil            (Func → int)     — Current character gil
-///   XA.Database.GetRetainerGil    (Func → int)     — Total retainer gil
+///   XA.Database.GetRetainerGil    (Func → long)    — Total retainer gil
 ///   XA.Database.GetFcInfo         (Func → string)  — FC name|tag|points|rank pipe-delimited
 ///   XA.Database.GetPlotInfo       (Func → string)  — FC estate info
 ///   XA.Database.GetPersonalPlotInfo (Func → string) — Personal estate + apartment pipe-delimited
@@ -37,7 +37,7 @@ public sealed class IpcProvider : IDisposable
     // Data query IPC channels
     private readonly ICallGateProvider<string> getCharacterNameProvider;
     private readonly ICallGateProvider<int> getGilProvider;
-    private readonly ICallGateProvider<int> getRetainerGilProvider;
+    private readonly ICallGateProvider<long> getRetainerGilProvider;
     private readonly ICallGateProvider<string> getFcInfoProvider;
     private readonly ICallGateProvider<string> getFcNameProvider;
     private readonly ICallGateProvider<string> getFcTagProvider;
@@ -63,7 +63,7 @@ public sealed class IpcProvider : IDisposable
         // Data query channels
         getCharacterNameProvider = pluginInterface.GetIpcProvider<string>("XA.Database.GetCharacterName");
         getGilProvider = pluginInterface.GetIpcProvider<int>("XA.Database.GetGil");
-        getRetainerGilProvider = pluginInterface.GetIpcProvider<int>("XA.Database.GetRetainerGil");
+        getRetainerGilProvider = pluginInterface.GetIpcProvider<long>("XA.Database.GetRetainerGil");
         getFcInfoProvider = pluginInterface.GetIpcProvider<string>("XA.Database.GetFcInfo");
         getFcNameProvider = pluginInterface.GetIpcProvider<string>("XA.Database.GetFcName");
         getFcTagProvider = pluginInterface.GetIpcProvider<string>("XA.Database.GetFcTag");
@@ -89,7 +89,7 @@ public sealed class IpcProvider : IDisposable
         string version,
         Func<string> getCharacterName,
         Func<int> getGil,
-        Func<int> getRetainerGil,
+        Func<long> getRetainerGil,
         Func<string> getFcInfo,
         Func<string> getFcName,
         Func<string> getFcTag,

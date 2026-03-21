@@ -105,7 +105,7 @@ public sealed class XaCharacterSnapshotRepository
         string sharedEstates,
         string apartment,
         int gil,
-        int retainerGil,
+        long retainerGil,
         List<CurrencyEntry> currencies,
         List<JobEntry> jobs,
         List<InventorySummary> inventorySummaries,
@@ -179,7 +179,7 @@ public sealed class XaCharacterSnapshotRepository
         string sharedEstates,
         string apartment,
         int gil,
-        int retainerGil,
+        long retainerGil,
         string validationJson)
     {
         var normalizedHousing = NormalizeHousingPayload(personalEstate, sharedEstates, apartment);
@@ -428,7 +428,7 @@ public sealed class XaCharacterSnapshotRepository
             SharedEstates = normalizedHousing.SharedEstates,
             Apartment = normalizedHousing.Apartment,
             Gil = ReadInt32(reader, "gil"),
-            RetainerGil = ReadInt32(reader, "retainer_gil"),
+            RetainerGil = ResolveRetainerGil(reader),
             RetainerCount = ReadInt32(reader, "retainer_count"),
             HighestJobLevel = ReadInt32(reader, "highest_job_level"),
             RetainerIdsJson = reader["retainer_ids_json"].ToString() ?? "[]",
@@ -454,7 +454,7 @@ public sealed class XaCharacterSnapshotRepository
             SquadronJson = reader["squadron_json"].ToString() ?? "null",
             VoyagesJson = reader["voyages_json"].ToString() ?? "null",
             ValidationJson = reader["validation_json"].ToString() ?? "{}",
-            SnapshotVersion = ReadInt32(reader, "snapshot_version", 1),
+            SnapshotVersion = ReadInt32(reader, "snapshot_version", Schema.CurrentSnapshotVersion),
             ExportedUtc = reader["exported_utc"].ToString() ?? string.Empty,
             Trigger = reader["trigger"].ToString() ?? string.Empty,
             TriggerDetail = reader["trigger_detail"].ToString() ?? string.Empty,
@@ -689,7 +689,7 @@ public sealed class XaCharacterSnapshotRepository
         string fallbackSharedEstates,
         string fallbackApartment,
         int fallbackGil,
-        int fallbackRetainerGil)
+        long fallbackRetainerGil)
     {
         ulong contentId = fallbackContentId;
         var name = fallbackCharacterName ?? string.Empty;
@@ -713,7 +713,7 @@ public sealed class XaCharacterSnapshotRepository
             sharedEstates = GetString(character, "sharedEstates", sharedEstates);
             apartment = GetString(character, "apartment", apartment);
             gil = GetInt32(character, "gil", gil);
-            retainerGil = GetInt32(character, "retainerGil", retainerGil);
+            retainerGil = GetInt64(character, "retainerGil", retainerGil);
         }
 
         datacenter = ResolveDatacenter(world, datacenter);
@@ -868,6 +868,20 @@ public sealed class XaCharacterSnapshotRepository
         return fallback;
     }
 
+    private static long GetInt64(JsonElement element, string propertyName, long fallback)
+    {
+        if (!TryGetPropertyIgnoreCase(element, propertyName, out var value))
+            return fallback;
+
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var number))
+            return number;
+
+        if (value.ValueKind == JsonValueKind.String && long.TryParse(value.GetString(), out number))
+            return number;
+
+        return fallback;
+    }
+
     private static ulong GetUInt64(JsonElement element, string propertyName, ulong fallback)
     {
         if (!TryGetPropertyIgnoreCase(element, propertyName, out var value))
@@ -909,6 +923,22 @@ public sealed class XaCharacterSnapshotRepository
         }
     }
 
+    private static long ResolveRetainerGil(SqliteDataReader reader)
+    {
+        var storedRetainerGil = ReadInt64(reader, "retainer_gil");
+        if (storedRetainerGil >= 0)
+            return storedRetainerGil;
+
+        var contentId = ReadUInt64(reader, "content_id");
+        var normalizedRetainers = NormalizeRetainerPayload(
+            DeserializeList<RetainerEntry>(reader["retainers_json"].ToString() ?? "[]"),
+            Enumerable.Empty<RetainerListingEntry>(),
+            Enumerable.Empty<RetainerInventoryItem>(),
+            contentId).Retainers;
+        var repairedRetainerGil = normalizedRetainers.Sum(retainer => (long)retainer.Gil);
+        return repairedRetainerGil > 0 ? repairedRetainerGil : storedRetainerGil;
+    }
+
     private static int ReadInt32(SqliteDataReader reader, string columnName, int fallback = 0)
     {
         var value = reader[columnName];
@@ -929,6 +959,33 @@ public sealed class XaCharacterSnapshotRepository
         try
         {
             return Convert.ToInt32(value, CultureInfo.InvariantCulture);
+        }
+        catch
+        {
+            return fallback;
+        }
+    }
+
+    private static long ReadInt64(SqliteDataReader reader, string columnName, long fallback = 0)
+    {
+        var value = reader[columnName];
+        if (value == null || value == DBNull.Value)
+            return fallback;
+
+        if (value is string textValue)
+        {
+            if (string.IsNullOrWhiteSpace(textValue))
+                return fallback;
+
+            if (long.TryParse(textValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedTextValue))
+                return parsedTextValue;
+
+            return fallback;
+        }
+
+        try
+        {
+            return Convert.ToInt64(value, CultureInfo.InvariantCulture);
         }
         catch
         {
@@ -978,7 +1035,7 @@ public sealed class XaCharacterSnapshotRow
     public string SharedEstates { get; init; } = string.Empty;
     public string Apartment { get; init; } = string.Empty;
     public int Gil { get; init; }
-    public int RetainerGil { get; init; }
+    public long RetainerGil { get; init; }
     public int RetainerCount { get; init; }
     public int HighestJobLevel { get; init; }
     public string RetainerIdsJson { get; init; } = "[]";

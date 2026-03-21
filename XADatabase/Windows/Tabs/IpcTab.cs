@@ -75,7 +75,7 @@ public partial class MainWindow
             DrawIpcRow("XA.Database.GetDbPath", "string", "Absolute path to xa.db");
             DrawIpcRow("XA.Database.GetCharacterName", "string", "Current character name");
             DrawIpcRow("XA.Database.GetGil", "int", "Current character's gil");
-            DrawIpcRow("XA.Database.GetRetainerGil", "int", "Total gil across all retainers");
+            DrawIpcRow("XA.Database.GetRetainerGil", "long", "Total gil across all retainers");
             DrawIpcRow("XA.Database.GetFcInfo", "string", "Legacy FC Name|Tag|Points|Rank compatibility payload");
             DrawIpcRow("XA.Database.GetFcName", "string", "Current Free Company name");
             DrawIpcRow("XA.Database.GetFcTag", "string", "Current Free Company tag");

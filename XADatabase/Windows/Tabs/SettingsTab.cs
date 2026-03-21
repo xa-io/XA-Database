@@ -387,7 +387,7 @@ public partial class MainWindow
         ImGui.Separator();
         ImGui.Spacing();
 
-        ImGui.TextDisabled($"XA Database v{PluginVersion}");
+        ImGui.TextDisabled($"Schema v{Schema.CurrentVersion} | Snapshot v{Schema.CurrentSnapshotVersion}");
         ImGui.TextDisabled("https://github.com/xa-io");
     }
 
