@@ -58,7 +58,7 @@ public partial class MainWindow
         var rows = new List<DashRow>(knownCharacters.Count);
         var snapshotMap = new Dictionary<ulong, XaCharacterSnapshotData>();
         long totalGil = 0, totalRetainerGil = 0, totalMarketValue = 0;
-        int totalRetainers = 0, totalListings = 0, totalVenturesReady = 0;
+        int totalRetainers = 0, totalListings = 0, totalVenturesReady = 0, totalLeveAllowances = 0;
 
         foreach (var ch in knownCharacters)
         {
@@ -78,6 +78,7 @@ public partial class MainWindow
             totalRetainers += snapshot.Retainers.Count;
             totalListings += snapshot.Listings.Count;
             totalVenturesReady += venturesReady;
+            totalLeveAllowances += JournalCollector.GetLeveAllowances(snapshot.Currencies) ?? 0;
 
             var jobDict = new Dictionary<string, int>();
             foreach (var j in snapshot.Jobs)
@@ -91,12 +92,13 @@ public partial class MainWindow
                 Name = snapshot.Row.CharacterName, World = snapshot.Row.World, Server = snapshot.Row.Datacenter, Region = snapshot.Row.Region, Gil = charGil, RetainerGil = retainerGil,
                 MarketValue = marketVal, Retainers = snapshot.Retainers.Count,
                 Listings = snapshot.Listings.Count, VenturesReady = venturesReady,
+                LeveAllowances = JournalCollector.GetLeveAllowances(snapshot.Currencies) ?? 0,
                 FcName = snapshot.FreeCompany?.Name ?? snapshot.Row.FcName ?? "-", LastSeen = snapshot.Row.UpdatedUtc,
                 ContentId = ch.ContentId, JobLevels = jobDict,
             });
         }
 
-        var colCount = 12 + DashJobAbbrevs.Length;
+        var colCount = 13 + DashJobAbbrevs.Length;
         var deleteModifierHeld = IsDeleteModifierHeld();
         ulong? pendingDeleteContentId = null;
         string pendingDeleteLabel = string.Empty;
@@ -118,6 +120,7 @@ public partial class MainWindow
                 ImGui.TableSetupColumn("Retainers", ImGuiTableColumnFlags.WidthFixed, 65);
                 ImGui.TableSetupColumn("Listings", ImGuiTableColumnFlags.WidthFixed, 60);
                 ImGui.TableSetupColumn("Ventures", ImGuiTableColumnFlags.WidthFixed, 60);
+                ImGui.TableSetupColumn("Leve A", ImGuiTableColumnFlags.WidthFixed, 60);
                 ImGui.TableSetupColumn("FC", ImGuiTableColumnFlags.WidthFixed, 120);
                 ImGui.TableSetupColumn("Last Seen", ImGuiTableColumnFlags.WidthFixed, 130);
                 foreach (var job in DashJobAbbrevs)
@@ -139,9 +142,9 @@ public partial class MainWindow
                         rows.Sort((a, b) =>
                         {
                             int cmp;
-                            if (col >= 12 && col < 12 + DashJobAbbrevs.Length)
+                            if (col >= 13 && col < 13 + DashJobAbbrevs.Length)
                             {
-                                var jobName = DashJobAbbrevs[col - 12];
+                                var jobName = DashJobAbbrevs[col - 13];
                                 var aLv = a.JobLevels != null && a.JobLevels.TryGetValue(jobName, out var av) ? av : 0;
                                 var bLv = b.JobLevels != null && b.JobLevels.TryGetValue(jobName, out var bv) ? bv : 0;
                                 cmp = aLv.CompareTo(bLv);
@@ -160,8 +163,9 @@ public partial class MainWindow
                                     7 => a.Retainers.CompareTo(b.Retainers),
                                     8 => a.Listings.CompareTo(b.Listings),
                                     9 => a.VenturesReady.CompareTo(b.VenturesReady),
-                                    10 => string.Compare(a.FcName, b.FcName, StringComparison.OrdinalIgnoreCase),
-                                    11 => string.Compare(a.LastSeen, b.LastSeen, StringComparison.Ordinal),
+                                    10 => a.LeveAllowances.CompareTo(b.LeveAllowances),
+                                    11 => string.Compare(a.FcName, b.FcName, StringComparison.OrdinalIgnoreCase),
+                                    12 => string.Compare(a.LastSeen, b.LastSeen, StringComparison.Ordinal),
                                     _ => 0,
                                 };
                             }
@@ -213,6 +217,11 @@ public partial class MainWindow
                         ImGui.TextColored(new Vector4(0.3f, 1.0f, 0.5f, 1.0f), $"{row.VenturesReady}");
                     else
                         ImGui.TextDisabled("0");
+                    ImGui.TableNextColumn();
+                    if (row.LeveAllowances > 0)
+                        ImGui.Text($"{row.LeveAllowances}");
+                    else
+                        ImGui.TextDisabled("0");
                     ImGui.TableNextColumn(); ImGui.Text(row.FcName);
                     ImGui.TableNextColumn(); ImGui.TextDisabled(row.LastSeen);
 
@@ -250,6 +259,11 @@ public partial class MainWindow
                 ImGui.TableNextColumn();
                 if (totalVenturesReady > 0)
                     ImGui.TextColored(new Vector4(0.3f, 1.0f, 0.5f, 1.0f), $"{totalVenturesReady}");
+                else
+                    ImGui.TextDisabled("0");
+                ImGui.TableNextColumn();
+                if (totalLeveAllowances > 0)
+                    ImGui.TextColored(new Vector4(1.0f, 0.9f, 0.4f, 1.0f), $"{totalLeveAllowances}");
                 else
                     ImGui.TextDisabled("0");
                 ImGui.TableNextColumn(); ImGui.Text(""); // FC

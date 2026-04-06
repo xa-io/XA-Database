@@ -102,7 +102,8 @@ public sealed class Plugin : IDalamudPlugin
             getApartment: () => MainWindow.GetApartment(),
             getCharacterSummaryJson: () => MainWindow.GetCharacterSummaryJson(),
             getLastSnapshotResultJson: () => MainWindow.GetLastSnapshotResultJson(),
-            searchItems: (query) => MainWindow.SearchItems(query)
+            searchItems: (query) => MainWindow.SearchItems(query),
+            getMatchingCharactersForItems: (itemKeysPayload) => MainWindow.GetMatchingCharactersForItems(itemKeysPayload)
         );
 
         WindowSystem.AddWindow(MainWindow);
@@ -210,5 +211,5 @@ public sealed class Plugin : IDalamudPlugin
 
 internal static class BuildInfo
 {
-    public const string Version = "0.0.0.25";
+    public const string Version = "0.0.0.26";
 }

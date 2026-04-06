@@ -29,6 +29,7 @@ public partial class MainWindow
     private void ApplySnapshotToCache(XaCharacterSnapshotData snapshot)
     {
         cachedCurrencies = snapshot.Currencies;
+        JournalCollector.SeedPersistedValue(snapshot.Currencies);
         cachedJobs = snapshot.Jobs;
         cachedInventory = snapshot.InventorySummaries;
         cachedItems = snapshot.AllItems;
@@ -86,6 +87,7 @@ public partial class MainWindow
         lastRefreshTime = DateTime.MinValue;
         FreeCompanyCollector.ClearPersistedValues();
         FcMemberCollector.ClearPersistedValues();
+        JournalCollector.ClearPersistedValues();
         HousingCollector.ResetPersonalHousingState();
     }
 
@@ -463,6 +465,10 @@ public partial class MainWindow
 
     private List<ItemLocationResult> SearchSnapshotItemsByName(string searchText)
     {
+        return SearchSnapshotItemsByName(searchText, 200);
+    }
+    private List<ItemLocationResult> SearchSnapshotItemsByName(string searchText, int? maxResults)
+    {
         if (string.IsNullOrWhiteSpace(searchText) || searchText.Length < 2)
             return new List<ItemLocationResult>();
 
@@ -504,12 +510,16 @@ public partial class MainWindow
             }
         }
 
-        return results
+        var orderedResults = results
             .OrderBy(r => r.ItemName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(r => r.CharacterName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(r => r.ContainerName, StringComparer.OrdinalIgnoreCase)
-            .Take(200)
             .ToList();
+
+        if (maxResults.HasValue)
+            return orderedResults.Take(Math.Max(0, maxResults.Value)).ToList();
+
+        return orderedResults;
     }
 
     private void MergeActiveRetainerListings()

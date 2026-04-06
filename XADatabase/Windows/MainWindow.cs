@@ -229,7 +229,7 @@ public partial class MainWindow : Window, IDisposable
         if (string.IsNullOrWhiteSpace(query) || query.Length < 2) return string.Empty;
         try
         {
-            var results = SearchSnapshotItemsByName(query);
+            var results = SearchSnapshotItemsByName(query, null);
             if (results.Count == 0) return string.Empty;
             return string.Join("\n", results.Select(r =>
                 $"{r.CharacterName}|{r.World}|{r.ContainerName}|{r.ItemName}|{r.ItemId}|{r.Quantity}|{r.IsHq}"));
@@ -239,6 +239,61 @@ public partial class MainWindow : Window, IDisposable
             Plugin.Log.Error($"[XA] IPC SearchItems error: {ex}");
             return string.Empty;
         }
+    }
+
+    /// <summary>Returns unique Character@World keys whose persisted snapshot contains any exact requested item key.</summary>
+    public string GetMatchingCharactersForItems(string itemKeysPayload)
+    {
+        if (string.IsNullOrWhiteSpace(itemKeysPayload))
+            return string.Empty;
+        try
+        {
+            var itemKeys = itemKeysPayload
+                .Split(new[] { ',', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(key => !string.IsNullOrWhiteSpace(key))
+                .ToHashSet(StringComparer.Ordinal);
+            if (itemKeys.Count == 0)
+                return string.Empty;
+
+            var matches = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var snapshot in plugin.SnapshotRepo.GetAllSnapshots())
+            {
+                if (!SnapshotContainsAnyMatchingItem(snapshot, itemKeys))
+                    continue;
+                matches.Add($"{snapshot.Row.CharacterName}@{snapshot.Row.World}");
+            }
+
+            return matches.Count == 0
+                ? string.Empty
+                : string.Join("\n", matches.OrderBy(key => key, StringComparer.OrdinalIgnoreCase));
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"[XA] IPC GetMatchingCharactersForItems error: {ex}");
+            return string.Empty;
+        }
+    }
+
+    private static bool SnapshotContainsAnyMatchingItem(XaCharacterSnapshotData snapshot, HashSet<string> itemKeys)
+    {
+        foreach (var item in snapshot.AllItems)
+        {
+            if (itemKeys.Contains(BuildItemMatchKey(item.ItemId, item.IsHq)))
+                return true;
+        }
+
+        foreach (var item in snapshot.RetainerItems)
+        {
+            if (itemKeys.Contains(BuildItemMatchKey(item.ItemId, item.IsHq)))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static string BuildItemMatchKey(uint itemId, bool isHq)
+    {
+        return $"{itemId}:{(isHq ? 1 : 0)}";
     }
 
     /// <summary>
@@ -347,6 +402,9 @@ public partial class MainWindow : Window, IDisposable
             cachedApartment = housing.Apartment;
 
             var persistedSnapshot = plugin.SnapshotRepo.GetSnapshot(playerState.ContentId);
+            JournalCollector.SeedPersistedValue(persistedSnapshot?.Currencies);
+            JournalCollector.TryCollectFromOpenAddon();
+            JournalCollector.ApplyToCurrencies(cachedCurrencies);
 
             if (persistedSnapshot == null && freshRetainers.Count == 0)
             {
@@ -544,6 +602,11 @@ public partial class MainWindow : Window, IDisposable
         {
             switch (trigger.Category)
             {
+                case "Journal" when trigger.AddonName == "Journal":
+                    Plugin.Log.Information("[XA] Journal closing — reading leve allowances via pointer.");
+                    JournalCollector.CollectFromAddon(trigger.AddonPtr);
+                    break;
+
                 case "FC Members" when trigger.AddonName == "FreeCompany":
                     Plugin.Log.Information("[XA] FreeCompany closing — reading FC points via pointer.");
                     FreeCompanyCollector.CollectFromAddon(trigger.AddonPtr);
@@ -615,6 +678,8 @@ public partial class MainWindow : Window, IDisposable
                 && !Plugin.Condition[ConditionFlag.BetweenAreas]
                 && !Plugin.Condition[ConditionFlag.BetweenAreas51];
             var persistedSnapshot = plugin.SnapshotRepo.GetSnapshot(contentId);
+            JournalCollector.SeedPersistedValue(persistedSnapshot?.Currencies);
+            JournalCollector.ApplyToCurrencies(cachedCurrencies);
             if (string.IsNullOrEmpty(cachedPersonalEstate) && !hasReliableLiveCharacterContext && persistedSnapshot != null)
                 cachedPersonalEstate = persistedSnapshot.Row.PersonalEstate;
             if (string.IsNullOrEmpty(cachedSharedEstates) && persistedSnapshot != null)

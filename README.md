@@ -2,6 +2,8 @@
 
 A Dalamud plugin for FINAL FANTASY XIV that collects character data — inventories, currencies, job levels, retainers, free company info, and more — and stores it in a local SQLite database.
 
+- View all our utilities & plugins here: https://aethertek.io/
+
 ## Key Features
 
 - **Offline Character Browser** — Browse saved characters anytime with name and world filters.
@@ -42,7 +44,7 @@ This means that there are still features being implemented and enhanced. Suggest
 4. In the **Custom Plugin Repositories** section, paste the following URL:
 
    ```text
-   https://raw.githubusercontent.com/xa-io/MyDalamudPlugins/master/pluginmaster.json
+   https://aethertek.io/x.json
    ```
 
 5. Click **Save**.

@@ -188,7 +188,7 @@ public partial class MainWindow
     {
         public string Name, World, Server, Region, FcName, LastSeen;
         public long Gil, RetainerGil, MarketValue;
-        public int Retainers, Listings, VenturesReady;
+        public int Retainers, Listings, VenturesReady, LeveAllowances;
         public ulong ContentId;
         public Dictionary<string, int> JobLevels;
     }

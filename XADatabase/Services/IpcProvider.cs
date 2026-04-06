@@ -22,6 +22,7 @@ namespace XADatabase.Services;
 ///   XA.Database.GetPlotInfo       (Func → string)  — FC estate info
 ///   XA.Database.GetPersonalPlotInfo (Func → string) — Personal estate + apartment pipe-delimited
 ///   XA.Database.SearchItems       (Func(string) → string) — Cross-character item search
+///   XA.Database.GetMatchingCharactersForItems (Func(string) → string) — Exact item-key character matching
 /// </summary>
 public sealed class IpcProvider : IDisposable
 {
@@ -48,6 +49,7 @@ public sealed class IpcProvider : IDisposable
     private readonly ICallGateProvider<string> getCharacterSummaryJsonProvider;
     private readonly ICallGateProvider<string> getLastSnapshotResultJsonProvider;
     private readonly ICallGateProvider<string, string> searchItemsProvider;
+    private readonly ICallGateProvider<string, string> getMatchingCharactersForItemsProvider;
 
     public IpcProvider(IDalamudPluginInterface pluginInterface, IPluginLog log)
     {
@@ -74,6 +76,7 @@ public sealed class IpcProvider : IDisposable
         getCharacterSummaryJsonProvider = pluginInterface.GetIpcProvider<string>("XA.Database.GetCharacterSummaryJson");
         getLastSnapshotResultJsonProvider = pluginInterface.GetIpcProvider<string>("XA.Database.GetLastSnapshotResultJson");
         searchItemsProvider = pluginInterface.GetIpcProvider<string, string>("XA.Database.SearchItems");
+        getMatchingCharactersForItemsProvider = pluginInterface.GetIpcProvider<string, string>("XA.Database.GetMatchingCharactersForItems");
 
         log.Information("[XA] IPC provider registered (XA.Database.*).");
     }
@@ -99,7 +102,8 @@ public sealed class IpcProvider : IDisposable
         Func<string> getApartment,
         Func<string> getCharacterSummaryJson,
         Func<string> getLastSnapshotResultJson,
-        Func<string, string> searchItems)
+        Func<string, string> searchItems,
+        Func<string, string> getMatchingCharactersForItems)
     {
         // Core actions
         saveProvider.RegisterAction(() =>
@@ -133,6 +137,7 @@ public sealed class IpcProvider : IDisposable
         getCharacterSummaryJsonProvider.RegisterFunc(() => getCharacterSummaryJson());
         getLastSnapshotResultJsonProvider.RegisterFunc(() => getLastSnapshotResultJson());
         searchItemsProvider.RegisterFunc((query) => searchItems(query));
+        getMatchingCharactersForItemsProvider.RegisterFunc((itemKeysPayload) => getMatchingCharactersForItems(itemKeysPayload));
 
         log.Information($"[XA] IPC handlers initialized ({IpcContractInfo.ChannelCount} channels).");
     }
@@ -157,6 +162,7 @@ public sealed class IpcProvider : IDisposable
         getCharacterSummaryJsonProvider.UnregisterFunc();
         getLastSnapshotResultJsonProvider.UnregisterFunc();
         searchItemsProvider.UnregisterFunc();
+        getMatchingCharactersForItemsProvider.UnregisterFunc();
 
         log.Information("[XA] IPC provider disposed.");
     }

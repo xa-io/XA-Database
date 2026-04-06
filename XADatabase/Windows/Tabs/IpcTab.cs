@@ -86,6 +86,7 @@ public partial class MainWindow
             DrawIpcRow("XA.Database.GetCharacterSummaryJson", "string", "Structured JSON summary for the current character snapshot");
             DrawIpcRow("XA.Database.GetLastSnapshotResultJson", "string", "Structured JSON payload describing the last save result");
             DrawIpcRow("XA.Database.SearchItems", "string", "Cross-character item search (takes query string, returns pipe-delimited results)");
+            DrawIpcRow("XA.Database.GetMatchingCharactersForItems", "string", "Exact item-key match (takes comma/newline itemId:isHq keys, returns Character@World lines)");
 
             ImGui.EndTable();
         }
