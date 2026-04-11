@@ -197,7 +197,13 @@ public sealed class Plugin : IDalamudPlugin
     private void OnLogout(int type, int code)
     {
         Log.Information("[XA] Character logged out — saving final snapshot.");
-        MainWindow.SaveToDatabase(SnapshotTrigger.Logout, "Client logout");
+        var result = MainWindow.SaveToDatabase(SnapshotTrigger.Logout, "Client logout");
+        if (result.Success)
+        {
+            var checkpointed = DatabaseService.CheckpointWal("FULL", "logout save");
+            if (!checkpointed)
+                Log.Warning("[XA] Logout checkpoint did not fully merge the WAL into xa.db. External SQLite readers still see the latest data, but file-only copies may lag until the next checkpoint.");
+        }
     }
 
     private void OnCommand(string command, string args)
@@ -211,5 +217,5 @@ public sealed class Plugin : IDalamudPlugin
 
 internal static class BuildInfo
 {
-    public const string Version = "0.0.0.27";
+    public const string Version = "0.0.0.28";
 }

@@ -636,25 +636,69 @@ public sealed class DatabaseService : IDisposable
     public string GetDbPath() => dbPath;
     public string GetDbDirectory() => Path.GetDirectoryName(dbPath) ?? ".";
 
+    public bool CheckpointWal(string mode = "PASSIVE", string reason = "")
+    {
+        if (HasActiveTransaction)
+        {
+            Plugin.Log.Warning("[XA] WAL checkpoint skipped because a transaction is still active.");
+            return false;
+        }
+
+        try
+        {
+            var conn = GetConnection();
+            var normalizedMode = NormalizeWalCheckpointMode(mode);
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"PRAGMA wal_checkpoint({normalizedMode})";
+
+            using var reader = cmd.ExecuteReader();
+            var busy = 0L;
+            var logFrames = 0L;
+            var checkpointedFrames = 0L;
+            if (reader.Read())
+            {
+                busy = reader.GetInt64(0);
+                logFrames = reader.GetInt64(1);
+                checkpointedFrames = reader.GetInt64(2);
+            }
+
+            var reasonSuffix = string.IsNullOrWhiteSpace(reason) ? string.Empty : $" ({reason})";
+            if (busy == 0)
+            {
+                Plugin.Log.Information($"[XA] WAL checkpoint {normalizedMode} completed{reasonSuffix}. Frames checkpointed: {checkpointedFrames}/{logFrames}.");
+                return true;
+            }
+
+            Plugin.Log.Warning($"[XA] WAL checkpoint {normalizedMode} reported busy={busy}{reasonSuffix}. Frames checkpointed: {checkpointedFrames}/{logFrames}.");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            var reasonSuffix = string.IsNullOrWhiteSpace(reason) ? string.Empty : $" ({reason})";
+            Plugin.Log.Error($"[XA] WAL checkpoint error{reasonSuffix}: {ex.Message}");
+            return false;
+        }
+    }
+
     public void Dispose()
     {
         if (connection?.State == System.Data.ConnectionState.Open)
-        {
-            try
-            {
-                using var cmd = connection.CreateCommand();
-                cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
-                cmd.ExecuteNonQuery();
-            }
-            catch (Exception ex)
-            {
-                Plugin.Log.Error($"[XA] WAL checkpoint error: {ex.Message}");
-            }
-        }
+            CheckpointWal("TRUNCATE", "dispose");
 
         connection?.Close();
         connection?.Dispose();
         connection = null;
+    }
+
+    private static string NormalizeWalCheckpointMode(string mode)
+    {
+        if (string.Equals(mode, "FULL", StringComparison.OrdinalIgnoreCase))
+            return "FULL";
+        if (string.Equals(mode, "RESTART", StringComparison.OrdinalIgnoreCase))
+            return "RESTART";
+        if (string.Equals(mode, "TRUNCATE", StringComparison.OrdinalIgnoreCase))
+            return "TRUNCATE";
+        return "PASSIVE";
     }
 
     private void ExecuteSchemaStatements(SqliteConnection conn, SqliteTransaction transaction)

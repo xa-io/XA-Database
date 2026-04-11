@@ -3,7 +3,7 @@
   "Name": "XA Database",
   "InternalName": "XADatabase",
   "RepoUrl": "https://github.com/xa-io/XA-Database",
-  "AssemblyVersion": "0.0.0.27",
+  "AssemblyVersion": "0.0.0.28",
   "Punchline": "Parser of all databases.",
   "Description": "Parser of all databases.",
   "ApplicableVersion": "any",
