@@ -187,7 +187,7 @@ public partial class MainWindow
     private struct DashRow
     {
         public string Name, World, Server, Region, FcName, LastSeen;
-        public long Gil, RetainerGil, MarketValue;
+        public long Gil, RetainerGil, FcChestGil, MarketValue;
         public int Retainers, Listings, VenturesReady, LeveAllowances;
         public ulong ContentId;
         public Dictionary<string, int> JobLevels;

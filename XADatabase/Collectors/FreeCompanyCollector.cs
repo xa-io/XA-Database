@@ -43,6 +43,12 @@ public static class FreeCompanyCollector
     public static int LastFcPoints { get; private set; }
 
     /// <summary>
+    /// Last collected FC chest gil amount (persists across refreshes).
+    /// Read from the FreeCompanyChest addon while it is open.
+    /// </summary>
+    public static int LastFcGil { get; private set; }
+
+    /// <summary>
     /// Last collected FC rank level (persists across refreshes).
     /// Read from FreeCompany addon text node [19] (#13) "Rank: 30".
     /// Supplements proxy->Rank as fallback when proxy returns 0.
@@ -98,19 +104,22 @@ public static class FreeCompanyCollector
             TotalMembers = proxy->TotalMembers,
             HomeWorldId = proxy->HomeWorldId,
             FcPoints = LastFcPoints,
+            FcGil = LastFcGil,
             Estate = LastEstate,
             Rank = proxy->Rank > 0 ? proxy->Rank : LastFcRank,
         };
     }
 
     /// <summary>
-    /// Seed the static LastFcPoints / LastEstate from persisted DB values.
+    /// Seed the static FC fallback values from persisted DB values.
     /// Called on startup so that Collect() returns non-zero values even before the addon is opened.
     /// </summary>
-    public static void SeedPersistedValues(int fcPoints, string estate, string fcName = "", string fcTag = "", byte fcRank = 0)
+    public static void SeedPersistedValues(int fcPoints, string estate, string fcName = "", string fcTag = "", byte fcRank = 0, int fcGil = 0)
     {
         if (LastFcPoints == 0 && fcPoints > 0)
             LastFcPoints = fcPoints;
+        if (LastFcGil == 0 && fcGil > 0)
+            LastFcGil = fcGil;
         if (string.IsNullOrEmpty(LastEstate) && !string.IsNullOrEmpty(estate))
             LastEstate = estate;
         if (string.IsNullOrEmpty(LastFcName) && !string.IsNullOrEmpty(fcName))
@@ -128,6 +137,7 @@ public static class FreeCompanyCollector
         LastFcName = string.Empty;
         LastFcTag = string.Empty;
         LastFcPoints = 0;
+        LastFcGil = 0;
         LastFcRank = 0;
         LastEstate = string.Empty;
     }
@@ -146,6 +156,13 @@ public static class FreeCompanyCollector
             {
                 Plugin.Log.Debug("[XA] FreeCompany addon is open — reading FC points.");
                 CollectFromAddon((nint)fcAddon);
+            }
+
+            var fcChestAddon = AtkStage.Instance()->RaptureAtkUnitManager->GetAddonByName("FreeCompanyChest");
+            if (fcChestAddon != null && fcChestAddon->IsVisible)
+            {
+                Plugin.Log.Debug("[XA] FreeCompanyChest addon is open — reading FC chest gil.");
+                CollectChestGilFromAddon((nint)fcChestAddon);
             }
         }
         catch (Exception ex)
@@ -219,6 +236,43 @@ public static class FreeCompanyCollector
         catch (Exception ex)
         {
             Plugin.Log.Error($"[XA] CollectFromAddon error: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Read FC chest gil from the FreeCompanyChest addon text nodes.
+    /// Known gil node: [93]→[2] (#2), e.g. "69".
+    /// </summary>
+    public static unsafe void CollectChestGilFromAddon(nint addonPtr)
+    {
+        try
+        {
+            if (addonPtr == nint.Zero)
+            {
+                Plugin.Log.Debug("[XA] FreeCompanyChest addon pointer is zero");
+                return;
+            }
+
+            var addon = (AtkUnitBase*)addonPtr;
+            Plugin.Log.Debug($"[XA] FreeCompanyChest addon: IsVisible={addon->IsVisible}, NodeCount={addon->UldManager.NodeListCount}");
+
+            var allText = AddonTextReader.ReadAllText(addon);
+            foreach (var (path, nodeId, text) in allText)
+            {
+                if (path != "[93]→[2]" || nodeId != 2)
+                    continue;
+
+                if (!TryParseGilValue(text, out var gil))
+                    continue;
+
+                LastFcGil = gil;
+                Plugin.Log.Information($"[XA] FC chest gil from {path} (#{nodeId}): {gil} (raw: \"{text}\")");
+                break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"[XA] CollectChestGilFromAddon error: {ex.Message}");
         }
     }
 
@@ -352,5 +406,15 @@ public static class FreeCompanyCollector
         if (len < 0) len = span.Length;
         if (len == 0) return string.Empty;
         return Encoding.UTF8.GetString(span.Slice(0, len));
+    }
+
+    private static bool TryParseGilValue(string text, out int value)
+    {
+        value = 0;
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        var digits = new string(text.Where(char.IsDigit).ToArray());
+        return digits.Length > 0 && int.TryParse(digits, out value);
     }
 }

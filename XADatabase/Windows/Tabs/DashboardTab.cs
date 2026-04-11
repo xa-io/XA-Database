@@ -57,7 +57,7 @@ public partial class MainWindow
         var snapshotLookup = GetDashboardSnapshotCache();
         var rows = new List<DashRow>(knownCharacters.Count);
         var snapshotMap = new Dictionary<ulong, XaCharacterSnapshotData>();
-        long totalGil = 0, totalRetainerGil = 0, totalMarketValue = 0;
+        long totalGil = 0, totalRetainerGil = 0, totalFcChestGil = 0, totalMarketValue = 0;
         int totalRetainers = 0, totalListings = 0, totalVenturesReady = 0, totalLeveAllowances = 0;
 
         foreach (var ch in knownCharacters)
@@ -69,11 +69,13 @@ public partial class MainWindow
 
             long charGil = snapshot.Row.Gil;
             long retainerGil = snapshot.Row.RetainerGil;
+            long fcChestGil = snapshot.FreeCompany?.FcGil ?? 0;
             long marketVal = snapshot.Listings.Sum(l => (long)l.UnitPrice * l.Quantity);
             int venturesReady = snapshot.Retainers.Count(r => r.VentureStatus == "Complete");
 
             totalGil += charGil;
             totalRetainerGil += retainerGil;
+            totalFcChestGil += fcChestGil;
             totalMarketValue += marketVal;
             totalRetainers += snapshot.Retainers.Count;
             totalListings += snapshot.Listings.Count;
@@ -89,7 +91,7 @@ public partial class MainWindow
 
             rows.Add(new DashRow
             {
-                Name = snapshot.Row.CharacterName, World = snapshot.Row.World, Server = snapshot.Row.Datacenter, Region = snapshot.Row.Region, Gil = charGil, RetainerGil = retainerGil,
+                Name = snapshot.Row.CharacterName, World = snapshot.Row.World, Server = snapshot.Row.Datacenter, Region = snapshot.Row.Region, Gil = charGil, RetainerGil = retainerGil, FcChestGil = fcChestGil,
                 MarketValue = marketVal, Retainers = snapshot.Retainers.Count,
                 Listings = snapshot.Listings.Count, VenturesReady = venturesReady,
                 LeveAllowances = JournalCollector.GetLeveAllowances(snapshot.Currencies) ?? 0,
@@ -98,7 +100,7 @@ public partial class MainWindow
             });
         }
 
-        var colCount = 13 + DashJobAbbrevs.Length;
+        var colCount = 14 + DashJobAbbrevs.Length;
         var deleteModifierHeld = IsDeleteModifierHeld();
         ulong? pendingDeleteContentId = null;
         string pendingDeleteLabel = string.Empty;
@@ -116,6 +118,7 @@ public partial class MainWindow
                 ImGui.TableSetupColumn("Region", ImGuiTableColumnFlags.WidthFixed, 70);
                 ImGui.TableSetupColumn("Gil", ImGuiTableColumnFlags.WidthFixed, 90);
                 ImGui.TableSetupColumn("Retainer Gil", ImGuiTableColumnFlags.WidthFixed, 100);
+                ImGui.TableSetupColumn("FC Chest Gil", ImGuiTableColumnFlags.WidthFixed, 110);
                 ImGui.TableSetupColumn("Market", ImGuiTableColumnFlags.WidthFixed, 90);
                 ImGui.TableSetupColumn("Retainers", ImGuiTableColumnFlags.WidthFixed, 65);
                 ImGui.TableSetupColumn("Listings", ImGuiTableColumnFlags.WidthFixed, 60);
@@ -142,9 +145,9 @@ public partial class MainWindow
                         rows.Sort((a, b) =>
                         {
                             int cmp;
-                            if (col >= 13 && col < 13 + DashJobAbbrevs.Length)
+                            if (col >= 14 && col < 14 + DashJobAbbrevs.Length)
                             {
-                                var jobName = DashJobAbbrevs[col - 13];
+                                var jobName = DashJobAbbrevs[col - 14];
                                 var aLv = a.JobLevels != null && a.JobLevels.TryGetValue(jobName, out var av) ? av : 0;
                                 var bLv = b.JobLevels != null && b.JobLevels.TryGetValue(jobName, out var bv) ? bv : 0;
                                 cmp = aLv.CompareTo(bLv);
@@ -159,13 +162,14 @@ public partial class MainWindow
                                     3 => string.Compare(a.Region, b.Region, StringComparison.OrdinalIgnoreCase),
                                     4 => a.Gil.CompareTo(b.Gil),
                                     5 => a.RetainerGil.CompareTo(b.RetainerGil),
-                                    6 => a.MarketValue.CompareTo(b.MarketValue),
-                                    7 => a.Retainers.CompareTo(b.Retainers),
-                                    8 => a.Listings.CompareTo(b.Listings),
-                                    9 => a.VenturesReady.CompareTo(b.VenturesReady),
-                                    10 => a.LeveAllowances.CompareTo(b.LeveAllowances),
-                                    11 => string.Compare(a.FcName, b.FcName, StringComparison.OrdinalIgnoreCase),
-                                    12 => string.Compare(a.LastSeen, b.LastSeen, StringComparison.Ordinal),
+                                    6 => a.FcChestGil.CompareTo(b.FcChestGil),
+                                    7 => a.MarketValue.CompareTo(b.MarketValue),
+                                    8 => a.Retainers.CompareTo(b.Retainers),
+                                    9 => a.Listings.CompareTo(b.Listings),
+                                    10 => a.VenturesReady.CompareTo(b.VenturesReady),
+                                    11 => a.LeveAllowances.CompareTo(b.LeveAllowances),
+                                    12 => string.Compare(a.FcName, b.FcName, StringComparison.OrdinalIgnoreCase),
+                                    13 => string.Compare(a.LastSeen, b.LastSeen, StringComparison.Ordinal),
                                     _ => 0,
                                 };
                             }
@@ -205,6 +209,11 @@ public partial class MainWindow
                     ImGui.TableNextColumn(); ImGui.Text(row.Region);
                     ImGui.TableNextColumn(); ImGui.Text($"{row.Gil:N0}");
                     ImGui.TableNextColumn(); ImGui.Text($"{row.RetainerGil:N0}");
+                    ImGui.TableNextColumn();
+                    if (row.FcChestGil > 0)
+                        ImGui.TextColored(new Vector4(1.0f, 0.9f, 0.3f, 1.0f), $"{row.FcChestGil:N0}");
+                    else
+                        ImGui.TextDisabled("0");
                     ImGui.TableNextColumn();
                     if (row.MarketValue > 0)
                         ImGui.TextColored(new Vector4(0.4f, 0.8f, 1.0f, 1.0f), $"{row.MarketValue:N0}");
@@ -250,6 +259,11 @@ public partial class MainWindow
                 ImGui.TextColored(new Vector4(1.0f, 0.9f, 0.4f, 1.0f), $"{totalGil:N0}");
                 ImGui.TableNextColumn();
                 ImGui.TextColored(new Vector4(1.0f, 0.9f, 0.4f, 1.0f), $"{totalRetainerGil:N0}");
+                ImGui.TableNextColumn();
+                if (totalFcChestGil > 0)
+                    ImGui.TextColored(new Vector4(1.0f, 0.9f, 0.4f, 1.0f), $"{totalFcChestGil:N0}");
+                else
+                    ImGui.TextDisabled("0");
                 ImGui.TableNextColumn();
                 ImGui.TextColored(new Vector4(1.0f, 0.9f, 0.4f, 1.0f), $"{totalMarketValue:N0}");
                 ImGui.TableNextColumn();

@@ -55,7 +55,7 @@ public partial class MainWindow
         NormalizeCachedRetainerState(snapshot.Row.ContentId);
 
         if (cachedFc != null)
-            FreeCompanyCollector.SeedPersistedValues(cachedFc.FcPoints, cachedFc.Estate, cachedFc.Name, cachedFc.Tag, cachedFc.Rank);
+            FreeCompanyCollector.SeedPersistedValues(cachedFc.FcPoints, cachedFc.Estate, cachedFc.Name, cachedFc.Tag, cachedFc.Rank, cachedFc.FcGil);
     }
 
     private void ResetCharacterScopedCache()

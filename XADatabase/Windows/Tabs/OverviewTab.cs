@@ -162,6 +162,15 @@ public partial class MainWindow
                         ImGui.TableNextColumn();
                         ImGui.Text($"{cachedFc.FcPoints:N0}");
                     }
+
+                    ImGui.TableNextRow();
+                    ImGui.TableNextColumn();
+                    ImGui.Text("FC Gil");
+                    ImGui.TableNextColumn();
+                    if (cachedFc.FcGil > 0)
+                        ImGui.TextColored(new Vector4(1.0f, 0.9f, 0.3f, 1.0f), $"{cachedFc.FcGil:N0}");
+                    else
+                        ImGui.TextDisabled("0");
                 }
             }
         }

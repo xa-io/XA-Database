@@ -13,5 +13,6 @@ public class FreeCompanyEntry
     public ushort TotalMembers { get; set; }
     public ushort HomeWorldId { get; set; }
     public int FcPoints { get; set; }
+    public int FcGil { get; set; }
     public string Estate { get; set; } = string.Empty;
 }

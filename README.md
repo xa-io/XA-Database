@@ -9,13 +9,13 @@ A Dalamud plugin for FINAL FANTASY XIV that collects character data — inventor
 - **Offline Character Browser** — Browse saved characters anytime with name and world filters.
 - **Full Inventory Tracking** — Track equipped gear, armoury, saddlebags, crystals, and more.
 - **Cross-Character Search** — Search items across characters, retainers, and saddlebags.
-- **Currency Tracking** — Track gil and major currencies from live wallet and container data.
+- **Currency Tracking** — Track gil, master-only FC chest gil, and major currencies from live wallet and container data.
 - **Job Levels** — View all combat, crafting, and gathering job levels in sortable tables.
 - **Retainer Management** — Review retainer inventory, ventures, market listings, and sale status.
-- **Free Company** — Save FC name, rank, members, points, squadron, and workshop voyage data.
+- **Free Company** — Save FC name, rank, members, points, master-only chest gil, squadron, and workshop voyage data.
 - **Housing** — Track personal, shared, and apartment housing with cleaner normalization.
 - **Collections & Quests** — View mounts, minions, rolls, cards, active quests, and MSQ progress.
-- **Dashboard** — Compare characters, gil, retainers, ventures, market value, MSQ, and collections in one view.
+- **Dashboard** — Compare characters, gil, retainers, FC chest gil, ventures, market value, MSQ, and collections in one view.
 - **Safe Character Cleanup** — Delete stored character snapshots from the Dashboard or Settings only while holding `Ctrl+Shift`.
 - **Auto-Save** — Save on login, logout, timers, and supported addon or window flows.
 - **Database Health Checks** — Run built-in health, read/write, and integrity checks from Settings.

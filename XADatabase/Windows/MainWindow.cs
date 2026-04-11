@@ -146,11 +146,95 @@ public partial class MainWindow : Window, IDisposable
         return cachedFc?.FcPoints ?? 0;
     }
 
+    private int GetCurrentFcChestGil()
+    {
+        return cachedFc?.FcGil ?? 0;
+    }
+
     /// <summary>Returns FC info as pipe-delimited string: Name|Tag|Points|Rank. Empty if no FC.</summary>
     public string GetFcInfo()
     {
         if (cachedFc == null) return string.Empty;
         return $"{cachedFc.Name}|{cachedFc.Tag}|{cachedFc.FcPoints}|{cachedFc.Rank}";
+    }
+
+    private List<CurrencyEntry> BuildCurrencyDisplayEntries()
+    {
+        var displayCurrencies = cachedCurrencies
+            .Select(entry => new CurrencyEntry
+            {
+                Category = entry.Category,
+                Name = entry.Name,
+                Amount = entry.Amount,
+                Cap = entry.Cap,
+            })
+            .ToList();
+
+        if (cachedFc == null)
+            return displayCurrencies;
+
+        var fcChestEntry = new CurrencyEntry
+        {
+            Category = "Common",
+            Name = "FC Chest",
+            Amount = GetCurrentFcChestGil(),
+            Cap = 999_999_999,
+        };
+
+        var gilIndex = displayCurrencies.FindIndex(entry =>
+            entry.Category.Equals("Common", StringComparison.OrdinalIgnoreCase)
+            && entry.Name.Equals("Gil", StringComparison.OrdinalIgnoreCase));
+        if (gilIndex >= 0)
+            displayCurrencies.Insert(gilIndex + 1, fcChestEntry);
+        else
+            displayCurrencies.Add(fcChestEntry);
+
+        return displayCurrencies;
+    }
+
+    private void ApplyFreeCompanyGilOwnership(ulong currentContentId, string currentCharacterName)
+    {
+        if (cachedFc == null)
+            return;
+
+        if (!IsCurrentCharacterFcMaster(currentCharacterName))
+        {
+            if (cachedFc.FcGil != 0)
+            {
+                Plugin.Log.Debug(
+                    $"[XA] Clearing FC chest gil for non-master character {currentCharacterName} (cid={currentContentId}, fcId={cachedFc.FcId}, master={cachedFc.Master}).");
+            }
+
+            cachedFc.FcGil = 0;
+            return;
+        }
+
+        if (cachedFc.FcGil == 0 && FreeCompanyCollector.LastFcGil > 0)
+            cachedFc.FcGil = FreeCompanyCollector.LastFcGil;
+    }
+
+    private bool IsCurrentCharacterFcMaster(string currentCharacterName)
+    {
+        if (cachedFc == null || cachedFc.FcId == 0)
+            return false;
+
+        var normalizedCurrentName = NormalizeCharacterName(currentCharacterName);
+        var normalizedMasterName = NormalizeCharacterName(cachedFc.Master);
+        return normalizedCurrentName.Length > 0
+            && normalizedCurrentName.Equals(normalizedMasterName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeCharacterName(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        var normalized = value.Trim();
+        var atIndex = normalized.IndexOf('@');
+        if (atIndex >= 0)
+            normalized = normalized[..atIndex].Trim();
+
+        return normalized;
     }
 
     /// <summary>Returns FC estate info (plot location string). Empty if none.</summary>
@@ -443,6 +527,7 @@ public partial class MainWindow : Window, IDisposable
                         TotalMembers = persistedSnapshot.FreeCompany.TotalMembers,
                         HomeWorldId = persistedSnapshot.FreeCompany.HomeWorldId,
                         FcPoints = persistedSnapshot.FreeCompany.FcPoints,
+                        FcGil = persistedSnapshot.FreeCompany.FcGil,
                         Estate = persistedSnapshot.FreeCompany.Estate,
                     };
                 }
@@ -474,15 +559,19 @@ public partial class MainWindow : Window, IDisposable
                     cachedFc.HomeWorldId = persistedFc.HomeWorldId;
                 if (cachedFc.FcPoints == 0 && persistedFc.FcPoints > 0)
                     cachedFc.FcPoints = persistedFc.FcPoints;
+                if (cachedFc.FcGil == 0 && persistedFc.FcGil > 0)
+                    cachedFc.FcGil = persistedFc.FcGil;
                 if (string.IsNullOrEmpty(cachedFc.Estate) && !string.IsNullOrEmpty(persistedFc.Estate))
                     cachedFc.Estate = persistedFc.Estate;
             }
 
             if (cachedFc != null)
             {
-                FreeCompanyCollector.SeedPersistedValues(cachedFc.FcPoints, cachedFc.Estate, cachedFc.Name, cachedFc.Tag, cachedFc.Rank);
+                FreeCompanyCollector.SeedPersistedValues(cachedFc.FcPoints, cachedFc.Estate, cachedFc.Name, cachedFc.Tag, cachedFc.Rank, cachedFc.FcGil);
                 if (cachedFc.FcPoints == 0 && FreeCompanyCollector.LastFcPoints > 0)
                     cachedFc.FcPoints = FreeCompanyCollector.LastFcPoints;
+                if (cachedFc.FcGil == 0 && FreeCompanyCollector.LastFcGil > 0)
+                    cachedFc.FcGil = FreeCompanyCollector.LastFcGil;
                 if (cachedFc.Rank == 0 && FreeCompanyCollector.LastFcRank > 0)
                     cachedFc.Rank = FreeCompanyCollector.LastFcRank;
                 if (string.IsNullOrEmpty(cachedFc.Estate) && !string.IsNullOrEmpty(FreeCompanyCollector.LastEstate))
@@ -492,6 +581,8 @@ public partial class MainWindow : Window, IDisposable
                 if (string.IsNullOrEmpty(cachedFc.Tag) && !string.IsNullOrEmpty(FreeCompanyCollector.LastFcTag))
                     cachedFc.Tag = FreeCompanyCollector.LastFcTag;
             }
+
+            ApplyFreeCompanyGilOwnership(playerState.ContentId, playerState.CharacterName.ToString());
 
             if (cachedFc != null && cachedFcMembers.Count == 0 && persistedSnapshot != null && persistedSnapshot.FcMembers.Count > 0)
             {
@@ -612,6 +703,11 @@ public partial class MainWindow : Window, IDisposable
                     FreeCompanyCollector.CollectFromAddon(trigger.AddonPtr);
                     break;
 
+                case "FC Chest" when trigger.AddonName == "FreeCompanyChest":
+                    Plugin.Log.Information("[XA] FreeCompanyChest closing — reading FC chest gil via pointer.");
+                    FreeCompanyCollector.CollectChestGilFromAddon(trigger.AddonPtr);
+                    break;
+
                 case "Estate" when trigger.AddonName == "HousingSignBoard":
                     Plugin.Log.Information("[XA] HousingSignBoard closing — reading housing info via pointer.");
                     HousingCollector.CollectFromAddon(trigger.AddonPtr);
@@ -694,6 +790,7 @@ public partial class MainWindow : Window, IDisposable
                 cachedFcMembers = persistedSnapshot.FcMembers;
             if (isOnHomeworld && cachedFc == null && hasReliableLiveCharacterContext)
                 ClearPersistedFreeCompanyState();
+            ApplyFreeCompanyGilOwnership(contentId, name);
             ApplyPersistedSaddlebagState(persistedSnapshot, IsSaddlebagClearConfirmed(trigger));
             ApplyPersistedSaddlebagInventorySummaries(persistedSnapshot, IsSaddlebagClearConfirmed(trigger));
             var validation = BuildValidationSummary(isOnHomeworld);

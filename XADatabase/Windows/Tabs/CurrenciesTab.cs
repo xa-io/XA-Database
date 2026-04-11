@@ -34,7 +34,8 @@ public partial class MainWindow
         ImGui.Spacing();
 
         var playerState = Plugin.PlayerState;
-        if (!playerState.IsLoaded && cachedCurrencies.Count == 0)
+        var displayCurrencies = BuildCurrencyDisplayEntries();
+        if (!playerState.IsLoaded && displayCurrencies.Count == 0)
         {
             ImGui.TextColored(new Vector4(1.0f, 0.6f, 0.0f, 1.0f), "Not logged in — select a character above to view data.");
             return;
@@ -45,7 +46,7 @@ public partial class MainWindow
         ImGui.Separator();
         ImGui.Spacing();
 
-        if (cachedCurrencies.Count == 0)
+        if (displayCurrencies.Count == 0)
         {
             ImGui.TextDisabled("No currency data collected yet. Click Refresh.");
             return;
@@ -62,7 +63,7 @@ public partial class MainWindow
                 ImGui.TableSetupColumn("Cap", ImGuiTableColumnFlags.WidthFixed, 100);
                 ImGui.TableHeadersRow();
 
-                foreach (var entry in cachedCurrencies)
+                foreach (var entry in displayCurrencies)
                 {
                     // Category separator row
                     if (entry.Category != currentCategory)
@@ -85,7 +86,7 @@ public partial class MainWindow
                     if (entry.Amount > 0)
                     {
                         // Gold color for gil, white for others
-                        if (entry.Name == "Gil")
+                        if (entry.Name == "Gil" || entry.Name == "FC Chest")
                             ImGui.TextColored(new Vector4(1.0f, 0.9f, 0.3f, 1.0f), $"{entry.Amount:N0}");
                         else
                             ImGui.Text($"{entry.Amount:N0}");
