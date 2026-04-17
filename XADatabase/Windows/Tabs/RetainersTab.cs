@@ -58,13 +58,13 @@ public partial class MainWindow
             if (table.Success)
             {
                 ImGui.TableSetupColumn("Name", ImGuiTableColumnFlags.WidthStretch);
-                ImGui.TableSetupColumn("Lv", ImGuiTableColumnFlags.WidthFixed, 30);
-                ImGui.TableSetupColumn("Gil", ImGuiTableColumnFlags.WidthFixed, 80);
-                ImGui.TableSetupColumn("Items", ImGuiTableColumnFlags.WidthFixed, 40);
-                ImGui.TableSetupColumn("Market", ImGuiTableColumnFlags.WidthFixed, 45);
-                ImGui.TableSetupColumn("Town", ImGuiTableColumnFlags.WidthFixed, 90);
-                ImGui.TableSetupColumn("Venture", ImGuiTableColumnFlags.WidthFixed, 65);
-                ImGui.TableSetupColumn("ETA", ImGuiTableColumnFlags.WidthFixed, 65);
+                ImGui.TableSetupColumn("Lv", ImGuiTableColumnFlags.WidthFixed, Scale(30f));
+                ImGui.TableSetupColumn("Gil", ImGuiTableColumnFlags.WidthFixed, Scale(80f));
+                ImGui.TableSetupColumn("Items", ImGuiTableColumnFlags.WidthFixed, Scale(40f));
+                ImGui.TableSetupColumn("Market", ImGuiTableColumnFlags.WidthFixed, Scale(45f));
+                ImGui.TableSetupColumn("Town", ImGuiTableColumnFlags.WidthFixed, Scale(90f));
+                ImGui.TableSetupColumn("Venture", ImGuiTableColumnFlags.WidthFixed, Scale(65f));
+                ImGui.TableSetupColumn("ETA", ImGuiTableColumnFlags.WidthFixed, Scale(65f));
                 ImGui.TableHeadersRow();
 
                 foreach (var r in cachedRetainers)
@@ -157,15 +157,15 @@ public partial class MainWindow
 
                     using (var listingTable = ImRaii.Table($"RetListing_{retainer.RetainerId}", 5,
                         ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY,
-                        new Vector2(0, Math.Min(retListings.Count * 24 + 30, 200))))
+                        new Vector2(0, Math.Min(retListings.Count * Scale(24f) + Scale(30f), Scale(200f)))))
                     {
                         if (listingTable.Success)
                         {
                             ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
-                            ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 40);
-                            ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, 30);
-                            ImGui.TableSetupColumn("Unit Price", ImGuiTableColumnFlags.WidthFixed, 100);
-                            ImGui.TableSetupColumn("Total", ImGuiTableColumnFlags.WidthFixed, 100);
+                            ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, Scale(40f));
+                            ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, Scale(30f));
+                            ImGui.TableSetupColumn("Unit Price", ImGuiTableColumnFlags.WidthFixed, Scale(100f));
+                            ImGui.TableSetupColumn("Total", ImGuiTableColumnFlags.WidthFixed, Scale(100f));
                             ImGui.TableHeadersRow();
 
                             foreach (var l in retListings)
@@ -203,14 +203,14 @@ public partial class MainWindow
 
                     using (var retInvTable = ImRaii.Table($"RetInv_{retainer.RetainerId}", 4,
                         ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY,
-                        new Vector2(0, Math.Min(stackedRetItems.Count * 24 + 30, 200))))
+                        new Vector2(0, Math.Min(stackedRetItems.Count * Scale(24f) + Scale(30f), Scale(200f)))))
                     {
                         if (retInvTable.Success)
                         {
                             ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
-                            ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 50);
-                            ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, 30);
-                            ImGui.TableSetupColumn("Item ID", ImGuiTableColumnFlags.WidthFixed, 60);
+                            ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, Scale(50f));
+                            ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, Scale(30f));
+                            ImGui.TableSetupColumn("Item ID", ImGuiTableColumnFlags.WidthFixed, Scale(60f));
                             ImGui.TableHeadersRow();
 
                             foreach (var item in stackedRetItems)
@@ -243,16 +243,16 @@ public partial class MainWindow
                 ImGui.TextColored(new Vector4(0.4f, 0.8f, 1.0f, 1.0f), $"Market Listings ({cachedListings.Count})");
                 ImGui.Spacing();
 
-                using (var listingTable = ImRaii.Table("ListingTable", 6, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY, new Vector2(0, 200)))
+                using (var listingTable = ImRaii.Table("ListingTable", 6, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY, ScaledVector(0f, 200f)))
                 {
                     if (listingTable.Success)
                     {
-                        ImGui.TableSetupColumn("Retainer", ImGuiTableColumnFlags.WidthFixed, 120);
+                        ImGui.TableSetupColumn("Retainer", ImGuiTableColumnFlags.WidthFixed, Scale(120f));
                         ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
-                        ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 40);
-                        ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, 30);
-                        ImGui.TableSetupColumn("Unit Price", ImGuiTableColumnFlags.WidthFixed, 100);
-                        ImGui.TableSetupColumn("Total", ImGuiTableColumnFlags.WidthFixed, 100);
+                        ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, Scale(40f));
+                        ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, Scale(30f));
+                        ImGui.TableSetupColumn("Unit Price", ImGuiTableColumnFlags.WidthFixed, Scale(100f));
+                        ImGui.TableSetupColumn("Total", ImGuiTableColumnFlags.WidthFixed, Scale(100f));
                         ImGui.TableHeadersRow();
 
                         foreach (var l in cachedListings)
@@ -288,15 +288,15 @@ public partial class MainWindow
                 ImGui.TextColored(new Vector4(0.4f, 0.8f, 1.0f, 1.0f), $"Retainer Inventory Items ({stackedFlatItems.Count} unique, {cachedRetainerItems.Sum(i => i.Quantity)} total)");
                 ImGui.Spacing();
 
-                using (var retInvTable = ImRaii.Table("RetainerInvTable", 5, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY | ImGuiTableFlags.Sortable | ImGuiTableFlags.SortTristate, new Vector2(0, 250)))
+                using (var retInvTable = ImRaii.Table("RetainerInvTable", 5, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY | ImGuiTableFlags.Sortable | ImGuiTableFlags.SortTristate, ScaledVector(0f, 250f)))
                 {
                     if (retInvTable.Success)
                     {
-                        ImGui.TableSetupColumn("Retainer", ImGuiTableColumnFlags.WidthFixed, 120);
+                        ImGui.TableSetupColumn("Retainer", ImGuiTableColumnFlags.WidthFixed, Scale(120f));
                         ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch | ImGuiTableColumnFlags.DefaultSort);
-                        ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 50);
-                        ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, 30);
-                        ImGui.TableSetupColumn("Item ID", ImGuiTableColumnFlags.WidthFixed, 60);
+                        ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, Scale(50f));
+                        ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, Scale(30f));
+                        ImGui.TableSetupColumn("Item ID", ImGuiTableColumnFlags.WidthFixed, Scale(60f));
                         ImGui.TableHeadersRow();
 
                         var retSortSpecs = ImGui.TableGetSortSpecs();

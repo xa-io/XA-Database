@@ -67,7 +67,7 @@ public partial class MainWindow
             {
                 if (fcTable.Success)
                 {
-                    ImGui.TableSetupColumn("Label", ImGuiTableColumnFlags.WidthFixed, 140);
+                    ImGui.TableSetupColumn("Label", ImGuiTableColumnFlags.WidthFixed, Scale(140f));
                     ImGui.TableSetupColumn("Value", ImGuiTableColumnFlags.WidthStretch);
 
                     ImGui.TableNextRow();
@@ -163,7 +163,7 @@ public partial class MainWindow
             {
                 if (phTable.Success)
                 {
-                    ImGui.TableSetupColumn("Type", ImGuiTableColumnFlags.WidthFixed, 120);
+                    ImGui.TableSetupColumn("Type", ImGuiTableColumnFlags.WidthFixed, Scale(120f));
                     ImGui.TableSetupColumn("Location", ImGuiTableColumnFlags.WidthStretch);
                     ImGui.TableHeadersRow();
 
@@ -214,15 +214,15 @@ public partial class MainWindow
         {
             using (var memberTable = ImRaii.Table("FcMembersTable", 5,
                 ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY | ImGuiTableFlags.Sortable,
-                new Vector2(0, 250)))
+                ScaledVector(0f, 250f)))
             {
                 if (memberTable.Success)
                 {
                     ImGui.TableSetupColumn("Name", ImGuiTableColumnFlags.DefaultSort | ImGuiTableColumnFlags.WidthStretch);
-                    ImGui.TableSetupColumn("Rank", ImGuiTableColumnFlags.WidthFixed, 90);
-                    ImGui.TableSetupColumn("Job", ImGuiTableColumnFlags.WidthFixed, 40);
-                    ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthFixed, 90);
-                    ImGui.TableSetupColumn("Status", ImGuiTableColumnFlags.WidthFixed, 55);
+                    ImGui.TableSetupColumn("Rank", ImGuiTableColumnFlags.WidthFixed, Scale(90f));
+                    ImGui.TableSetupColumn("Job", ImGuiTableColumnFlags.WidthFixed, Scale(40f));
+                    ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthFixed, Scale(90f));
+                    ImGui.TableSetupColumn("Status", ImGuiTableColumnFlags.WidthFixed, Scale(55f));
                     ImGui.TableSetupScrollFreeze(0, 1);
                     ImGui.TableHeadersRow();
 
@@ -310,7 +310,7 @@ public partial class MainWindow
             {
                 if (sqInfoTable.Success)
                 {
-                    ImGui.TableSetupColumn("Label", ImGuiTableColumnFlags.WidthFixed, 140);
+                    ImGui.TableSetupColumn("Label", ImGuiTableColumnFlags.WidthFixed, Scale(140f));
                     ImGui.TableSetupColumn("Value", ImGuiTableColumnFlags.WidthStretch);
 
                     ImGui.TableNextRow();
@@ -342,9 +342,9 @@ public partial class MainWindow
                 if (sqTable.Success)
                 {
                     ImGui.TableSetupColumn("Name", ImGuiTableColumnFlags.WidthStretch);
-                    ImGui.TableSetupColumn("Job", ImGuiTableColumnFlags.WidthFixed, 40);
-                    ImGui.TableSetupColumn("Level", ImGuiTableColumnFlags.WidthFixed, 45);
-                    ImGui.TableSetupColumn("Mastery", ImGuiTableColumnFlags.WidthFixed, 120);
+                    ImGui.TableSetupColumn("Job", ImGuiTableColumnFlags.WidthFixed, Scale(40f));
+                    ImGui.TableSetupColumn("Level", ImGuiTableColumnFlags.WidthFixed, Scale(45f));
+                    ImGui.TableSetupColumn("Mastery", ImGuiTableColumnFlags.WidthFixed, Scale(120f));
                     ImGui.TableHeadersRow();
 
                     foreach (var m in cachedSquadron.Members)
@@ -402,15 +402,15 @@ public partial class MainWindow
             ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingFixedFit);
         if (!table.Success) return;
 
-        ImGui.TableSetupColumn("Slot", ImGuiTableColumnFlags.WidthFixed, 40);
-        ImGui.TableSetupColumn("Rank", ImGuiTableColumnFlags.WidthFixed, 40);
-        ImGui.TableSetupColumn("Build", ImGuiTableColumnFlags.WidthFixed, 80);
-        ImGui.TableSetupColumn("Status", ImGuiTableColumnFlags.WidthFixed, 100);
-        ImGui.TableSetupColumn("Surv", ImGuiTableColumnFlags.WidthFixed, 45);
-        ImGui.TableSetupColumn("Retr", ImGuiTableColumnFlags.WidthFixed, 45);
-        ImGui.TableSetupColumn("Spd", ImGuiTableColumnFlags.WidthFixed, 45);
-        ImGui.TableSetupColumn("Rng", ImGuiTableColumnFlags.WidthFixed, 45);
-        ImGui.TableSetupColumn("Favor", ImGuiTableColumnFlags.WidthFixed, 45);
+        ImGui.TableSetupColumn("Slot", ImGuiTableColumnFlags.WidthFixed, Scale(40f));
+        ImGui.TableSetupColumn("Rank", ImGuiTableColumnFlags.WidthFixed, Scale(40f));
+        ImGui.TableSetupColumn("Build", ImGuiTableColumnFlags.WidthFixed, Scale(80f));
+        ImGui.TableSetupColumn("Status", ImGuiTableColumnFlags.WidthFixed, Scale(100f));
+        ImGui.TableSetupColumn("Surv", ImGuiTableColumnFlags.WidthFixed, Scale(45f));
+        ImGui.TableSetupColumn("Retr", ImGuiTableColumnFlags.WidthFixed, Scale(45f));
+        ImGui.TableSetupColumn("Spd", ImGuiTableColumnFlags.WidthFixed, Scale(45f));
+        ImGui.TableSetupColumn("Rng", ImGuiTableColumnFlags.WidthFixed, Scale(45f));
+        ImGui.TableSetupColumn("Favor", ImGuiTableColumnFlags.WidthFixed, Scale(45f));
         ImGui.TableHeadersRow();
 
         foreach (var v in entries)

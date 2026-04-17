@@ -46,8 +46,8 @@ public partial class MainWindow
 
         if (ImGui.BeginTable("IpcActions", 3, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
         {
-            ImGui.TableSetupColumn("Channel", ImGuiTableColumnFlags.WidthFixed, 220);
-            ImGui.TableSetupColumn("Type", ImGuiTableColumnFlags.WidthFixed, 100);
+            ImGui.TableSetupColumn("Channel", ImGuiTableColumnFlags.WidthFixed, Scale(220f));
+            ImGui.TableSetupColumn("Type", ImGuiTableColumnFlags.WidthFixed, Scale(100f));
             ImGui.TableSetupColumn("Description");
             ImGui.TableHeadersRow();
 
@@ -65,8 +65,8 @@ public partial class MainWindow
 
         if (ImGui.BeginTable("IpcQueries", 3, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
         {
-            ImGui.TableSetupColumn("Channel", ImGuiTableColumnFlags.WidthFixed, 260);
-            ImGui.TableSetupColumn("Returns", ImGuiTableColumnFlags.WidthFixed, 80);
+            ImGui.TableSetupColumn("Channel", ImGuiTableColumnFlags.WidthFixed, Scale(260f));
+            ImGui.TableSetupColumn("Returns", ImGuiTableColumnFlags.WidthFixed, Scale(80f));
             ImGui.TableSetupColumn("Description");
             ImGui.TableHeadersRow();
 

@@ -59,8 +59,8 @@ public partial class MainWindow
             if (table.Success)
             {
                 ImGui.TableSetupColumn("Currency", ImGuiTableColumnFlags.WidthStretch);
-                ImGui.TableSetupColumn("Amount", ImGuiTableColumnFlags.WidthFixed, 120);
-                ImGui.TableSetupColumn("Cap", ImGuiTableColumnFlags.WidthFixed, 100);
+                ImGui.TableSetupColumn("Amount", ImGuiTableColumnFlags.WidthFixed, Scale(120f));
+                ImGui.TableSetupColumn("Cap", ImGuiTableColumnFlags.WidthFixed, Scale(100f));
                 ImGui.TableHeadersRow();
 
                 foreach (var entry in displayCurrencies)

@@ -66,7 +66,7 @@ public partial class MainWindow
         {
             if (table.Success)
             {
-                ImGui.TableSetupColumn("Label", ImGuiTableColumnFlags.WidthFixed, 140);
+                ImGui.TableSetupColumn("Label", ImGuiTableColumnFlags.WidthFixed, Scale(140f));
                 ImGui.TableSetupColumn("Value", ImGuiTableColumnFlags.WidthStretch);
 
                 // Character name
@@ -201,8 +201,8 @@ public partial class MainWindow
                 if (invTable.Success)
                 {
                     ImGui.TableSetupColumn("Container", ImGuiTableColumnFlags.WidthStretch);
-                    ImGui.TableSetupColumn("Used / Total", ImGuiTableColumnFlags.WidthFixed, 100);
-                    ImGui.TableSetupColumn("%%", ImGuiTableColumnFlags.WidthFixed, 50);
+                    ImGui.TableSetupColumn("Used / Total", ImGuiTableColumnFlags.WidthFixed, Scale(100f));
+                    ImGui.TableSetupColumn("%%", ImGuiTableColumnFlags.WidthFixed, Scale(50f));
                     ImGui.TableHeadersRow();
 
                     foreach (var (label, prefixes) in overviewGroups)

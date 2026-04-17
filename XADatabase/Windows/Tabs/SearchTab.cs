@@ -36,7 +36,7 @@ public partial class MainWindow
         ImGui.TextDisabled("Search across all inventories, retainers, and saddlebags for all saved characters.");
         ImGui.Spacing();
 
-        ImGui.SetNextItemWidth(400);
+        ImGui.SetNextItemWidth(Scale(400f));
         if (ImGui.InputTextWithHint("##GlobalItemSearch", "Search items by name (2+ chars)...", ref itemSearchText, 256))
         {
             if (itemSearchText.Length >= 2)
@@ -59,15 +59,15 @@ public partial class MainWindow
             ImGui.TextDisabled($"{grouped.Count} result(s)");
             ImGui.Spacing();
 
-            using (var searchTable = ImRaii.Table("GlobalSearchResults", 5, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY | ImGuiTableFlags.Sortable | ImGuiTableFlags.SortTristate, new Vector2(0, ImGui.GetContentRegionAvail().Y - 30)))
+            using (var searchTable = ImRaii.Table("GlobalSearchResults", 5, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY | ImGuiTableFlags.Sortable | ImGuiTableFlags.SortTristate, new Vector2(0, MathF.Max(0f, ImGui.GetContentRegionAvail().Y - Scale(30f)))))
             {
                 if (searchTable.Success)
                 {
                     ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch | ImGuiTableColumnFlags.DefaultSort);
-                    ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 50);
-                    ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, 30);
-                    ImGui.TableSetupColumn("Location", ImGuiTableColumnFlags.WidthFixed, 180);
-                    ImGui.TableSetupColumn("Character", ImGuiTableColumnFlags.WidthFixed, 160);
+                    ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, Scale(50f));
+                    ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, Scale(30f));
+                    ImGui.TableSetupColumn("Location", ImGuiTableColumnFlags.WidthFixed, Scale(180f));
+                    ImGui.TableSetupColumn("Character", ImGuiTableColumnFlags.WidthFixed, Scale(160f));
                     ImGui.TableHeadersRow();
 
                     // Sort based on clicked column

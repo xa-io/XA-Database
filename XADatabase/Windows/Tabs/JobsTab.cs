@@ -115,7 +115,7 @@ public partial class MainWindow
             if (job.IsUnlocked)
             {
                 ImGui.Text($"  {job.Name}");
-                ImGui.SameLine(ImGui.GetContentRegionAvail().X - 30);
+                ImGui.SameLine(ImGui.GetContentRegionAvail().X - Scale(30f));
                 if (job.Level >= 100)
                     ImGui.TextColored(new Vector4(0.3f, 1.0f, 0.5f, 1.0f), $"{job.Level}");
                 else
@@ -124,7 +124,7 @@ public partial class MainWindow
             else
             {
                 ImGui.TextDisabled($"  {job.Name}");
-                ImGui.SameLine(ImGui.GetContentRegionAvail().X - 30);
+                ImGui.SameLine(ImGui.GetContentRegionAvail().X - Scale(30f));
                 ImGui.TextDisabled("-");
             }
         }

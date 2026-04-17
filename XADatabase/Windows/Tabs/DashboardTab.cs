@@ -26,6 +26,8 @@ public partial class MainWindow
 
     private void DrawDashboardTab()
     {
+        var comparisonSectionHeight = Scale(DashboardComparisonSectionHeight);
+
         using var tab = ImRaii.TabItem("Dashboard");
         if (!tab.Success)
             return;
@@ -108,26 +110,26 @@ public partial class MainWindow
         using (var dashTable = ImRaii.Table("DashboardTable", colCount,
             ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY | ImGuiTableFlags.ScrollX
             | ImGuiTableFlags.Sortable | ImGuiTableFlags.SortTristate,
-            new Vector2(0, DashboardComparisonSectionHeight)))
+            new Vector2(0, comparisonSectionHeight)))
         {
             if (dashTable.Success)
             {
-                ImGui.TableSetupColumn("Character", ImGuiTableColumnFlags.DefaultSort | ImGuiTableColumnFlags.WidthFixed, 150);
-                ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthFixed, 80);
-                ImGui.TableSetupColumn("Server", ImGuiTableColumnFlags.WidthFixed, 90);
-                ImGui.TableSetupColumn("Region", ImGuiTableColumnFlags.WidthFixed, 70);
-                ImGui.TableSetupColumn("Gil", ImGuiTableColumnFlags.WidthFixed, 90);
-                ImGui.TableSetupColumn("Retainer Gil", ImGuiTableColumnFlags.WidthFixed, 100);
-                ImGui.TableSetupColumn("FC Chest Gil", ImGuiTableColumnFlags.WidthFixed, 110);
-                ImGui.TableSetupColumn("Market", ImGuiTableColumnFlags.WidthFixed, 90);
-                ImGui.TableSetupColumn("Retainers", ImGuiTableColumnFlags.WidthFixed, 65);
-                ImGui.TableSetupColumn("Listings", ImGuiTableColumnFlags.WidthFixed, 60);
-                ImGui.TableSetupColumn("Ventures", ImGuiTableColumnFlags.WidthFixed, 60);
-                ImGui.TableSetupColumn("Leve A", ImGuiTableColumnFlags.WidthFixed, 60);
-                ImGui.TableSetupColumn("FC", ImGuiTableColumnFlags.WidthFixed, 120);
-                ImGui.TableSetupColumn("Last Seen", ImGuiTableColumnFlags.WidthFixed, 130);
+                ImGui.TableSetupColumn("Character", ImGuiTableColumnFlags.DefaultSort | ImGuiTableColumnFlags.WidthFixed, Scale(150f));
+                ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthFixed, Scale(80f));
+                ImGui.TableSetupColumn("Server", ImGuiTableColumnFlags.WidthFixed, Scale(90f));
+                ImGui.TableSetupColumn("Region", ImGuiTableColumnFlags.WidthFixed, Scale(70f));
+                ImGui.TableSetupColumn("Gil", ImGuiTableColumnFlags.WidthFixed, Scale(90f));
+                ImGui.TableSetupColumn("Retainer Gil", ImGuiTableColumnFlags.WidthFixed, Scale(100f));
+                ImGui.TableSetupColumn("FC Chest Gil", ImGuiTableColumnFlags.WidthFixed, Scale(110f));
+                ImGui.TableSetupColumn("Market", ImGuiTableColumnFlags.WidthFixed, Scale(90f));
+                ImGui.TableSetupColumn("Retainers", ImGuiTableColumnFlags.WidthFixed, Scale(65f));
+                ImGui.TableSetupColumn("Listings", ImGuiTableColumnFlags.WidthFixed, Scale(60f));
+                ImGui.TableSetupColumn("Ventures", ImGuiTableColumnFlags.WidthFixed, Scale(60f));
+                ImGui.TableSetupColumn("Leve A", ImGuiTableColumnFlags.WidthFixed, Scale(60f));
+                ImGui.TableSetupColumn("FC", ImGuiTableColumnFlags.WidthFixed, Scale(120f));
+                ImGui.TableSetupColumn("Last Seen", ImGuiTableColumnFlags.WidthFixed, Scale(130f));
                 foreach (var job in DashJobAbbrevs)
-                    ImGui.TableSetupColumn(job, ImGuiTableColumnFlags.WidthFixed, 28);
+                    ImGui.TableSetupColumn(job, ImGuiTableColumnFlags.WidthFixed, Scale(28f));
                 ImGui.TableSetupScrollFreeze(1, 1);
                 ImGui.TableHeadersRow();
 
@@ -330,14 +332,14 @@ public partial class MainWindow
         using (var msqCompTable = ImRaii.Table("MsqCompTable", 4,
             ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY
             | ImGuiTableFlags.Sortable | ImGuiTableFlags.SortTristate,
-            new Vector2(0, DashboardComparisonSectionHeight)))
+            new Vector2(0, comparisonSectionHeight)))
         {
             if (msqCompTable.Success)
             {
-                ImGui.TableSetupColumn("Region / Server / World", ImGuiTableColumnFlags.WidthFixed, 200);
+                ImGui.TableSetupColumn("Region / Server / World", ImGuiTableColumnFlags.WidthFixed, Scale(200f));
                 ImGui.TableSetupColumn("Character", ImGuiTableColumnFlags.DefaultSort | ImGuiTableColumnFlags.WidthStretch);
-                ImGui.TableSetupColumn("Progress", ImGuiTableColumnFlags.WidthFixed, 100);
-                ImGui.TableSetupColumn("Percent Complete", ImGuiTableColumnFlags.WidthFixed, 140);
+                ImGui.TableSetupColumn("Progress", ImGuiTableColumnFlags.WidthFixed, Scale(100f));
+                ImGui.TableSetupColumn("Percent Complete", ImGuiTableColumnFlags.WidthFixed, Scale(140f));
                 ImGui.TableSetupScrollFreeze(0, 1);
                 ImGui.TableHeadersRow();
 
@@ -411,16 +413,16 @@ public partial class MainWindow
         using (var collCompTable = ImRaii.Table("CollCompTable", 6,
             ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY
             | ImGuiTableFlags.Sortable | ImGuiTableFlags.SortTristate,
-            new Vector2(0, DashboardComparisonSectionHeight)))
+            new Vector2(0, comparisonSectionHeight)))
         {
             if (collCompTable.Success)
             {
-                ImGui.TableSetupColumn("Region / Server / World", ImGuiTableColumnFlags.WidthFixed, 200);
+                ImGui.TableSetupColumn("Region / Server / World", ImGuiTableColumnFlags.WidthFixed, Scale(200f));
                 ImGui.TableSetupColumn("Character", ImGuiTableColumnFlags.DefaultSort | ImGuiTableColumnFlags.WidthStretch);
-                ImGui.TableSetupColumn("Mounts", ImGuiTableColumnFlags.WidthFixed, 70);
-                ImGui.TableSetupColumn("Minions", ImGuiTableColumnFlags.WidthFixed, 70);
-                ImGui.TableSetupColumn("Orchestrion", ImGuiTableColumnFlags.WidthFixed, 80);
-                ImGui.TableSetupColumn("TT Cards", ImGuiTableColumnFlags.WidthFixed, 70);
+                ImGui.TableSetupColumn("Mounts", ImGuiTableColumnFlags.WidthFixed, Scale(70f));
+                ImGui.TableSetupColumn("Minions", ImGuiTableColumnFlags.WidthFixed, Scale(70f));
+                ImGui.TableSetupColumn("Orchestrion", ImGuiTableColumnFlags.WidthFixed, Scale(80f));
+                ImGui.TableSetupColumn("TT Cards", ImGuiTableColumnFlags.WidthFixed, Scale(70f));
                 ImGui.TableSetupScrollFreeze(0, 1);
                 ImGui.TableHeadersRow();
 

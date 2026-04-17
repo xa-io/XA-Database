@@ -67,7 +67,7 @@ public partial class MainWindow
         ImGui.Spacing();
 
         var autoSaveMin = plugin.Configuration.AutoSaveIntervalMinutes;
-        ImGui.SetNextItemWidth(120);
+        ImGui.SetNextItemWidth(Scale(120f));
         if (ImGui.InputInt("Interval (minutes)", ref autoSaveMin))
         {
             if (autoSaveMin < 0) autoSaveMin = 0;
@@ -120,7 +120,7 @@ public partial class MainWindow
             if (ImGui.Button("Clear Task Log"))
                 taskLogEntries.Clear();
 
-            using var taskLogChild = ImRaii.Child("XaDbTaskLog", new Vector2(0, 160), true);
+            using var taskLogChild = ImRaii.Child("XaDbTaskLog", ScaledVector(0f, 160f), true);
             if (taskLogChild.Success)
             {
                 if (taskLogEntries.Count == 0)
@@ -412,10 +412,10 @@ public partial class MainWindow
 
     private static int GetTrackedAddonColumnCount(float availableWidth)
     {
-        if (availableWidth >= 900f)
+        if (availableWidth >= Scale(900f))
             return 3;
 
-        if (availableWidth >= 560f)
+        if (availableWidth >= Scale(560f))
             return 2;
 
         return 1;

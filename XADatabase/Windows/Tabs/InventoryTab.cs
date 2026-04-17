@@ -63,7 +63,7 @@ public partial class MainWindow
         // ── Item Search (cross-character) ──
         ImGui.TextColored(new Vector4(0.4f, 0.8f, 1.0f, 1.0f), "Item Locator");
         ImGui.Spacing();
-        ImGui.SetNextItemWidth(300);
+        ImGui.SetNextItemWidth(Scale(300f));
         if (ImGui.InputTextWithHint("##ItemSearch", "Search items across all characters...", ref itemSearchText, 256))
         {
             if (itemSearchText.Length >= 2)
@@ -81,15 +81,15 @@ public partial class MainWindow
                 .ToList();
 
             ImGui.Spacing();
-            using (var searchTable = ImRaii.Table("ItemSearchResults", 5, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY | ImGuiTableFlags.Sortable, new Vector2(0, 150)))
+            using (var searchTable = ImRaii.Table("ItemSearchResults", 5, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY | ImGuiTableFlags.Sortable, ScaledVector(0f, 150f)))
             {
                 if (searchTable.Success)
                 {
                     ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
-                    ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 50);
-                    ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, 30);
-                    ImGui.TableSetupColumn("Location", ImGuiTableColumnFlags.WidthFixed, 160);
-                    ImGui.TableSetupColumn("Character", ImGuiTableColumnFlags.WidthFixed, 140);
+                    ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, Scale(50f));
+                    ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, Scale(30f));
+                    ImGui.TableSetupColumn("Location", ImGuiTableColumnFlags.WidthFixed, Scale(160f));
+                    ImGui.TableSetupColumn("Character", ImGuiTableColumnFlags.WidthFixed, Scale(140f));
                     ImGui.TableHeadersRow();
 
                     var sortSpecs = ImGui.TableGetSortSpecs();
@@ -172,12 +172,12 @@ public partial class MainWindow
 
             using var itemTable = ImRaii.Table($"InvSection_{sectionName}", 3,
                 ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY,
-                new Vector2(0, Math.Min(aggregated.Count * 24 + 30, 250)));
+                new Vector2(0, Math.Min(aggregated.Count * Scale(24f) + Scale(30f), Scale(250f))));
             if (!itemTable.Success) continue;
 
             ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
-            ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 60);
-            ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, 30);
+            ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, Scale(60f));
+            ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, Scale(30f));
             ImGui.TableHeadersRow();
 
             foreach (var item in aggregated)

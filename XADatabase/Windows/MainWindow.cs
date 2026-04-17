@@ -6,6 +6,7 @@ using System.Numerics;
 using System.Text.Json;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Utility;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using Lumina.Excel.Sheets;
@@ -90,17 +91,34 @@ public partial class MainWindow : Window, IDisposable
     public MainWindow(Plugin plugin)
         : base("XA Database##MainWindow", ImGuiWindowFlags.None)
     {
-        SizeConstraints = new WindowSizeConstraints
-        {
-            MinimumSize = new Vector2(300, 240),
-            MaximumSize = new Vector2(float.MaxValue, float.MaxValue)
-        };
-
         this.plugin = plugin;
+        UpdateSizeConstraints(UiScaleSafe);
         RefreshMigrationState();
     }
 
     public void Dispose() { }
+
+    public override void PreDraw()
+        => UpdateSizeConstraints(UiScale);
+
+    private static float UiScale => ImGuiHelpers.GlobalScale;
+
+    private static float UiScaleSafe => ImGuiHelpers.GlobalScaleSafe;
+
+    private static float Scale(float value)
+        => value * UiScale;
+
+    private static Vector2 ScaledVector(float x, float y)
+        => ImGuiHelpers.ScaledVector2(x, y);
+
+    private void UpdateSizeConstraints(float scale)
+    {
+        SizeConstraints = new WindowSizeConstraints
+        {
+            MinimumSize = new Vector2(300f * scale, 240f * scale),
+            MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
+        };
+    }
 
     // ───────────────────────────────────────────────
     //  IPC Data Accessors — called by IpcProvider via Plugin.cs
@@ -1433,9 +1451,9 @@ public partial class MainWindow : Window, IDisposable
         {
             if (!isLoggedIn) ImGui.TextDisabled("View character:");
             if (!isLoggedIn) ImGui.SameLine();
-            var charSelectorWidth = MathF.Max(125f, MathF.Min(210f, ImGui.GetContentRegionAvail().X));
+            var charSelectorWidth = MathF.Max(Scale(125f), MathF.Min(Scale(210f), ImGui.GetContentRegionAvail().X));
             ImGui.SetNextItemWidth(charSelectorWidth);
-            ImGui.SetNextWindowSizeConstraints(new Vector2(charSelectorWidth, 0), new Vector2(charSelectorWidth, 420));
+            ImGui.SetNextWindowSizeConstraints(new Vector2(charSelectorWidth, 0), new Vector2(charSelectorWidth, Scale(420f)));
             var previewLabel = viewingContentId.HasValue ? viewingCharName
                 : isLoggedIn ? "Current Character (Live)" : "Select a character...";
             if (ImGui.BeginCombo("##CharSelector", previewLabel, ImGuiComboFlags.HeightLarge))
@@ -1500,7 +1518,7 @@ public partial class MainWindow : Window, IDisposable
         DrawLatestSnapshotStatusPanel();
 
         // Reserve space for the sticky footer status bar
-        var footerHeight = ImGui.GetFrameHeightWithSpacing() + 4;
+        var footerHeight = ImGui.GetFrameHeightWithSpacing() + Scale(4f);
         var contentHeight = ImGui.GetContentRegionAvail().Y - footerHeight;
 
         // Tab bar in scrollable child region

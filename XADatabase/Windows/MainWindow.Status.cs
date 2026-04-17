@@ -99,7 +99,7 @@ public partial class MainWindow
         if (ImGui.Button("Clear Save History"))
             saveHistoryEntries.Clear();
 
-        using var saveHistoryChild = ImRaii.Child("XaDbSaveHistory", new Vector2(0, 170), true);
+        using var saveHistoryChild = ImRaii.Child("XaDbSaveHistory", ScaledVector(0f, 170f), true);
         if (!saveHistoryChild.Success)
             return;
 

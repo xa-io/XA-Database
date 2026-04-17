@@ -46,9 +46,9 @@ public partial class MainWindow
                 if (collTable.Success)
                 {
                     ImGui.TableSetupColumn("Category", ImGuiTableColumnFlags.WidthStretch);
-                    ImGui.TableSetupColumn("Unlocked", ImGuiTableColumnFlags.WidthFixed, 80);
-                    ImGui.TableSetupColumn("Total", ImGuiTableColumnFlags.WidthFixed, 80);
-                    ImGui.TableSetupColumn("Progress", ImGuiTableColumnFlags.WidthFixed, 120);
+                    ImGui.TableSetupColumn("Unlocked", ImGuiTableColumnFlags.WidthFixed, Scale(80f));
+                    ImGui.TableSetupColumn("Total", ImGuiTableColumnFlags.WidthFixed, Scale(80f));
+                    ImGui.TableSetupColumn("Progress", ImGuiTableColumnFlags.WidthFixed, Scale(120f));
                     ImGui.TableHeadersRow();
 
                     foreach (var c in cachedCollections)
@@ -86,13 +86,13 @@ public partial class MainWindow
 
         if (cachedQuests.Count > 0)
         {
-            using (var questTable = ImRaii.Table("QuestTable", 3, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY, new Vector2(0, 300)))
+            using (var questTable = ImRaii.Table("QuestTable", 3, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY, ScaledVector(0f, 300f)))
             {
                 if (questTable.Success)
                 {
                     ImGui.TableSetupColumn("Quest", ImGuiTableColumnFlags.WidthStretch);
-                    ImGui.TableSetupColumn("Step", ImGuiTableColumnFlags.WidthFixed, 50);
-                    ImGui.TableSetupColumn("ID", ImGuiTableColumnFlags.WidthFixed, 60);
+                    ImGui.TableSetupColumn("Step", ImGuiTableColumnFlags.WidthFixed, Scale(50f));
+                    ImGui.TableSetupColumn("ID", ImGuiTableColumnFlags.WidthFixed, Scale(60f));
                     ImGui.TableHeadersRow();
 
                     foreach (var q in cachedQuests)
@@ -135,13 +135,13 @@ public partial class MainWindow
 
             // Group by expansion
             string? currentExpansion = null;
-            using (var msqTable = ImRaii.Table("MsqTable", 3, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY, new Vector2(0, 350)))
+            using (var msqTable = ImRaii.Table("MsqTable", 3, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY, ScaledVector(0f, 350f)))
             {
                 if (msqTable.Success)
                 {
                     ImGui.TableSetupColumn("Milestone", ImGuiTableColumnFlags.WidthStretch);
-                    ImGui.TableSetupColumn("Expansion", ImGuiTableColumnFlags.WidthFixed, 120);
-                    ImGui.TableSetupColumn("Status", ImGuiTableColumnFlags.WidthFixed, 60);
+                    ImGui.TableSetupColumn("Expansion", ImGuiTableColumnFlags.WidthFixed, Scale(120f));
+                    ImGui.TableSetupColumn("Status", ImGuiTableColumnFlags.WidthFixed, Scale(60f));
                     ImGui.TableHeadersRow();
 
                     foreach (var m in cachedMsqMilestones)
