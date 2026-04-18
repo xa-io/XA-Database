@@ -215,20 +215,26 @@ public partial class MainWindow : Window, IDisposable
         if (cachedFc == null)
             return;
 
-        if (!IsCurrentCharacterFcMaster(currentCharacterName))
-        {
-            if (cachedFc.FcGil != 0)
-            {
-                Plugin.Log.Debug(
-                    $"[XA] Clearing FC chest gil for non-master character {currentCharacterName} (cid={currentContentId}, fcId={cachedFc.FcId}, master={cachedFc.Master}).");
-            }
+        NormalizeFreeCompanyGilObservation(cachedFc);
 
-            cachedFc.FcGil = 0;
+        if (FreeCompanyCollector.HasObservedFcChestGil
+            && (FreeCompanyCollector.LastObservedFcGilFcId == 0
+                || cachedFc.FcId == 0
+                || cachedFc.FcId == FreeCompanyCollector.LastObservedFcGilFcId))
+        {
+            cachedFc.FcGil = FreeCompanyCollector.LastFcGil;
+            cachedFc.FcGilObserved = true;
             return;
         }
 
-        if (cachedFc.FcGil == 0 && FreeCompanyCollector.LastFcGil > 0)
-            cachedFc.FcGil = FreeCompanyCollector.LastFcGil;
+        if (cachedFc.FcGilObserved)
+            return;
+
+        if (!TryRestorePersistedFreeCompanyGil(currentContentId, out var sourceContentId))
+            return;
+
+        Plugin.Log.Debug(
+            $"[XA] Restored FC chest gil {cachedFc.FcGil:N0} for {currentCharacterName} (cid={currentContentId}, sourceCid={sourceContentId}, fcId={cachedFc.FcId}).");
     }
 
     private bool IsCurrentCharacterFcMaster(string currentCharacterName)
@@ -253,6 +259,47 @@ public partial class MainWindow : Window, IDisposable
             normalized = normalized[..atIndex].Trim();
 
         return normalized;
+    }
+
+    private static void NormalizeFreeCompanyGilObservation(FreeCompanyEntry fc)
+    {
+        if (fc.FcGil > 0)
+            fc.FcGilObserved = true;
+    }
+
+    private bool TryRestorePersistedFreeCompanyGil(ulong currentContentId, out ulong sourceContentId)
+    {
+        sourceContentId = 0;
+        if (cachedFc == null || cachedFc.FcId == 0)
+            return false;
+
+        XaCharacterSnapshotData? bestSnapshot = null;
+        foreach (var snapshot in plugin.SnapshotRepo.GetAllSnapshots())
+        {
+            var snapshotFc = snapshot.FreeCompany;
+            if (snapshotFc == null || snapshotFc.FcId != cachedFc.FcId)
+                continue;
+
+            NormalizeFreeCompanyGilObservation(snapshotFc);
+            if (!snapshotFc.FcGilObserved)
+                continue;
+
+            if (bestSnapshot == null
+                || string.CompareOrdinal(snapshot.Row.UpdatedUtc, bestSnapshot.Row.UpdatedUtc) > 0
+                || (string.Equals(snapshot.Row.UpdatedUtc, bestSnapshot.Row.UpdatedUtc, StringComparison.Ordinal)
+                    && snapshot.Row.ContentId == currentContentId))
+            {
+                bestSnapshot = snapshot;
+            }
+        }
+
+        if (bestSnapshot?.FreeCompany == null)
+            return false;
+
+        cachedFc.FcGil = bestSnapshot.FreeCompany.FcGil;
+        cachedFc.FcGilObserved = bestSnapshot.FreeCompany.FcGilObserved || bestSnapshot.FreeCompany.FcGil > 0;
+        sourceContentId = bestSnapshot.Row.ContentId;
+        return true;
     }
 
     /// <summary>Returns FC estate info (plot location string). Empty if none.</summary>
@@ -542,12 +589,13 @@ public partial class MainWindow : Window, IDisposable
                         GrandCompany = persistedSnapshot.FreeCompany.GrandCompany,
                         GrandCompanyName = persistedSnapshot.FreeCompany.GrandCompanyName,
                         OnlineMembers = persistedSnapshot.FreeCompany.OnlineMembers,
-                        TotalMembers = persistedSnapshot.FreeCompany.TotalMembers,
-                        HomeWorldId = persistedSnapshot.FreeCompany.HomeWorldId,
-                        FcPoints = persistedSnapshot.FreeCompany.FcPoints,
-                        FcGil = persistedSnapshot.FreeCompany.FcGil,
-                        Estate = persistedSnapshot.FreeCompany.Estate,
-                    };
+                    TotalMembers = persistedSnapshot.FreeCompany.TotalMembers,
+                    HomeWorldId = persistedSnapshot.FreeCompany.HomeWorldId,
+                    FcPoints = persistedSnapshot.FreeCompany.FcPoints,
+                    FcGil = persistedSnapshot.FreeCompany.FcGil,
+                    FcGilObserved = persistedSnapshot.FreeCompany.FcGilObserved || persistedSnapshot.FreeCompany.FcGil > 0,
+                    Estate = persistedSnapshot.FreeCompany.Estate,
+                };
                 }
                 else if (isOnHomeworld && hasReliableLiveCharacterContext)
                 {
@@ -579,17 +627,22 @@ public partial class MainWindow : Window, IDisposable
                     cachedFc.FcPoints = persistedFc.FcPoints;
                 if (cachedFc.FcGil == 0 && persistedFc.FcGil > 0)
                     cachedFc.FcGil = persistedFc.FcGil;
+                if (!cachedFc.FcGilObserved && (persistedFc.FcGilObserved || persistedFc.FcGil > 0))
+                    cachedFc.FcGilObserved = true;
                 if (string.IsNullOrEmpty(cachedFc.Estate) && !string.IsNullOrEmpty(persistedFc.Estate))
                     cachedFc.Estate = persistedFc.Estate;
             }
 
             if (cachedFc != null)
             {
-                FreeCompanyCollector.SeedPersistedValues(cachedFc.FcPoints, cachedFc.Estate, cachedFc.Name, cachedFc.Tag, cachedFc.Rank, cachedFc.FcGil);
+                FreeCompanyCollector.SeedPersistedValues(cachedFc.FcPoints, cachedFc.Estate, cachedFc.Name, cachedFc.Tag, cachedFc.Rank, cachedFc.FcGil, cachedFc.FcGilObserved, cachedFc.FcId);
                 if (cachedFc.FcPoints == 0 && FreeCompanyCollector.LastFcPoints > 0)
                     cachedFc.FcPoints = FreeCompanyCollector.LastFcPoints;
-                if (cachedFc.FcGil == 0 && FreeCompanyCollector.LastFcGil > 0)
+                if (cachedFc.FcGil == 0 && (FreeCompanyCollector.LastFcGil > 0 || FreeCompanyCollector.HasObservedFcChestGil))
+                {
                     cachedFc.FcGil = FreeCompanyCollector.LastFcGil;
+                    cachedFc.FcGilObserved = true;
+                }
                 if (cachedFc.Rank == 0 && FreeCompanyCollector.LastFcRank > 0)
                     cachedFc.Rank = FreeCompanyCollector.LastFcRank;
                 if (string.IsNullOrEmpty(cachedFc.Estate) && !string.IsNullOrEmpty(FreeCompanyCollector.LastEstate))

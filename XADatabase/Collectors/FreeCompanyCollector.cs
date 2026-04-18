@@ -49,6 +49,18 @@ public static class FreeCompanyCollector
     public static int LastFcGil { get; private set; }
 
     /// <summary>
+    /// True once FC chest gil has been observed from a persisted snapshot or a live FC chest addon read.
+    /// Lets the save path distinguish an authoritative chest-observed 0 from an uninitialized fallback 0.
+    /// </summary>
+    public static bool HasObservedFcChestGil { get; private set; }
+
+    /// <summary>
+    /// FC ID associated with the last authoritative FC chest gil value, when known.
+    /// Prevents a live chest observation from leaking into another FC's cached snapshot.
+    /// </summary>
+    public static ulong LastObservedFcGilFcId { get; private set; }
+
+    /// <summary>
     /// Last collected FC rank level (persists across refreshes).
     /// Read from FreeCompany addon text node [19] (#13) "Rank: 30".
     /// Supplements proxy->Rank as fallback when proxy returns 0.
@@ -105,6 +117,7 @@ public static class FreeCompanyCollector
             HomeWorldId = proxy->HomeWorldId,
             FcPoints = LastFcPoints,
             FcGil = LastFcGil,
+            FcGilObserved = HasObservedFcChestGil || LastFcGil > 0,
             Estate = LastEstate,
             Rank = proxy->Rank > 0 ? proxy->Rank : LastFcRank,
         };
@@ -114,11 +127,17 @@ public static class FreeCompanyCollector
     /// Seed the static FC fallback values from persisted DB values.
     /// Called on startup so that Collect() returns non-zero values even before the addon is opened.
     /// </summary>
-    public static void SeedPersistedValues(int fcPoints, string estate, string fcName = "", string fcTag = "", byte fcRank = 0, int fcGil = 0)
+    public static void SeedPersistedValues(int fcPoints, string estate, string fcName = "", string fcTag = "", byte fcRank = 0, int fcGil = 0, bool fcGilObserved = false, ulong fcId = 0)
     {
         if (LastFcPoints == 0 && fcPoints > 0)
             LastFcPoints = fcPoints;
-        if (LastFcGil == 0 && fcGil > 0)
+        if (!HasObservedFcChestGil && (fcGil > 0 || fcGilObserved))
+        {
+            HasObservedFcChestGil = true;
+            if (fcId != 0)
+                LastObservedFcGilFcId = fcId;
+        }
+        if (LastFcGil == 0 && (fcGil > 0 || fcGilObserved))
             LastFcGil = fcGil;
         if (string.IsNullOrEmpty(LastEstate) && !string.IsNullOrEmpty(estate))
             LastEstate = estate;
@@ -138,6 +157,8 @@ public static class FreeCompanyCollector
         LastFcTag = string.Empty;
         LastFcPoints = 0;
         LastFcGil = 0;
+        HasObservedFcChestGil = false;
+        LastObservedFcGilFcId = 0;
         LastFcRank = 0;
         LastEstate = string.Empty;
     }
@@ -266,6 +287,9 @@ public static class FreeCompanyCollector
                     continue;
 
                 LastFcGil = gil;
+                HasObservedFcChestGil = true;
+                var proxy = InfoProxyFreeCompany.Instance();
+                LastObservedFcGilFcId = proxy != null ? proxy->Id : 0;
                 Plugin.Log.Information($"[XA] FC chest gil from {path} (#{nodeId}): {gil} (raw: \"{text}\")");
                 break;
             }
