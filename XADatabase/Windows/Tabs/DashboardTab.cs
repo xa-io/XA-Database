@@ -241,7 +241,8 @@ public partial class MainWindow
                     {
                         ImGui.TableNextColumn();
                         var lv = row.JobLevels != null && row.JobLevels.TryGetValue(job, out var v) ? v : 0;
-                        if (lv >= 100)
+                        var levelCap = JobLevelCaps.ForAbbreviation(job);
+                        if ((levelCap > 0 && lv >= levelCap) || lv >= 100)
                             ImGui.TextColored(new Vector4(1.0f, 0.85f, 0.0f, 1.0f), $"{lv}");
                         else if (lv > 0)
                             ImGui.Text($"{lv}");

@@ -185,8 +185,10 @@ public class ContainerItemRepository
 
 public class ItemLocationResult
 {
+    public ulong ContentId { get; set; }
     public string CharacterName { get; set; } = string.Empty;
     public string World { get; set; } = string.Empty;
+    public string UpdatedUtc { get; set; } = string.Empty;
     public string ContainerName { get; set; } = string.Empty;
     public uint ItemId { get; set; }
     public string ItemName { get; set; } = string.Empty;

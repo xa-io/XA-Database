@@ -1,5 +1,6 @@
 ﻿using System;
 using Dalamud.Game.Command;
+using Dalamud.Game.Gui.ContextMenu;
 using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Interface.Windowing;
@@ -23,6 +24,8 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static ICondition Condition { get; private set; } = null!;
     [PluginService] internal static IFramework Framework { get; private set; } = null!;
     [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
+    [PluginService] internal static IContextMenu ContextMenu { get; private set; } = null!;
+    [PluginService] internal static IGameInteropProvider GameInterop { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
     private const string CommandName = "/xadatabase";
@@ -49,6 +52,8 @@ public sealed class Plugin : IDalamudPlugin
     public CollectionRepository CollectionRepo { get; init; }
     public AddonWatcher AddonWatcher { get; init; }
     public IpcProvider IpcProvider { get; init; }
+    public ItemLocationTooltipService ItemLocationTooltip { get; init; }
+    public ItemSearchContextMenuService ItemSearchContextMenu { get; init; }
 
     // Framework tick flags — heavy work moved out of Draw() to avoid HITCH warnings
     private bool needsInitialSeed = true;
@@ -57,6 +62,13 @@ public sealed class Plugin : IDalamudPlugin
     public Plugin()
     {
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
+        var showVersionInWindowTitleDefaultChanged = false;
+        if (!Configuration.ShowVersionInWindowTitleDefaultApplied)
+        {
+            Configuration.ShowVersionInWindowTitle = true;
+            Configuration.ShowVersionInWindowTitleDefaultApplied = true;
+            showVersionInWindowTitleDefaultChanged = true;
+        }
 
         // Initialize database
         DatabaseService = new DatabaseService(PluginInterface.GetPluginConfigDirectory());
@@ -77,11 +89,19 @@ public sealed class Plugin : IDalamudPlugin
         AddonWatcher = new AddonWatcher(AddonLifecycle, Log);
         IpcProvider = new IpcProvider(PluginInterface, Log);
 
+        if (showVersionInWindowTitleDefaultChanged)
+            Configuration.Save();
+
         // Prune old currency history on startup
 
         MainWindow = new MainWindow(this);
         if (Configuration.OpenPluginOnLoad)
             MainWindow.IsOpen = true;
+        ItemLocationTooltip = new ItemLocationTooltipService(this, GameInterop, GameGui, Log);
+        ItemSearchContextMenu = new ItemSearchContextMenuService(
+            ContextMenu,
+            Log,
+            (itemId, isHq) => MainWindow.OpenSearchForItem(itemId, isHq));
 
         // Wire IPC handlers now that MainWindow exists
         IpcProvider.Initialize(
@@ -107,6 +127,9 @@ public sealed class Plugin : IDalamudPlugin
         );
 
         WindowSystem.AddWindow(MainWindow);
+
+        if (Configuration.SearchItemContextMenuEnabled && !ItemSearchContextMenu.SetEnabled(true))
+            Log.Warning("[XA] Search item context menu could not be enabled.");
 
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
@@ -139,6 +162,8 @@ public sealed class Plugin : IDalamudPlugin
     {
         IpcProvider.Dispose();
         AddonWatcher.Dispose();
+        ItemLocationTooltip.Dispose();
+        ItemSearchContextMenu.Dispose();
 
         Framework.Update -= OnFrameworkUpdate;
 
@@ -217,5 +242,5 @@ public sealed class Plugin : IDalamudPlugin
 
 internal static class BuildInfo
 {
-    public const string Version = "0.0.0.30";
+    public const string Version = "0.0.0.31";
 }

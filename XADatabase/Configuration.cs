@@ -9,6 +9,11 @@ public class Configuration : IPluginConfiguration
     public int Version { get; set; } = 0;
 
     public bool OpenPluginOnLoad { get; set; } = false;
+    public bool ShowVersionInWindowTitle { get; set; } = true;
+    public bool ShowVersionInWindowTitleDefaultApplied { get; set; } = false;
+    public bool SearchHoverTooltipEnabled { get; set; } = true;
+    public int SearchHoverTooltipCharacterLimit { get; set; } = 3;
+    public bool SearchItemContextMenuEnabled { get; set; } = true;
 
     // Auto-save interval in minutes (0 = disabled, only manual/login/logout saves)
     public int AutoSaveIntervalMinutes { get; set; } = 0;

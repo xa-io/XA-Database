@@ -197,7 +197,7 @@ public partial class MainWindow
     private static readonly string[] DashJobAbbrevs = {
         "PLD", "WAR", "DRK", "GNB",
         "WHM", "SCH", "AST", "SGE",
-        "MNK", "DRG", "NIN", "SAM", "RPR", "VPR",
+        "MNK", "DRG", "NIN", "SAM", "RPR", "VPR", "BST",
         "BRD", "MCH", "DNC",
         "BLM", "SMN", "RDM", "PCT",
         "CRP", "BSM", "ARM", "GSM", "LTW", "WVR", "ALC", "CUL",

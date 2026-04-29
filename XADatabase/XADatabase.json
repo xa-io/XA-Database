@@ -3,11 +3,11 @@
   "Name": "XA Database",
   "InternalName": "XADatabase",
   "RepoUrl": "https://github.com/xa-io/XA-Database",
-  "AssemblyVersion": "0.0.0.30",
+  "AssemblyVersion": "0.0.0.31",
   "Punchline": "Parser of all databases.",
   "Description": "Parser of all databases.",
   "ApplicableVersion": "any",
-  "DalamudApiLevel": 14,
+  "DalamudApiLevel": 15,
   "AcceptsFeedback": false,
   "Tags": [
     "xa",

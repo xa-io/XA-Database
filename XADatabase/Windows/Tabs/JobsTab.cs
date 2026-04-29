@@ -116,7 +116,7 @@ public partial class MainWindow
             {
                 ImGui.Text($"  {job.Name}");
                 ImGui.SameLine(ImGui.GetContentRegionAvail().X - Scale(30f));
-                if (job.Level >= 100)
+                if (JobLevelCaps.IsAtCap(job) || job.Level >= 100)
                     ImGui.TextColored(new Vector4(0.3f, 1.0f, 0.5f, 1.0f), $"{job.Level}");
                 else
                     ImGui.Text($"{job.Level}");

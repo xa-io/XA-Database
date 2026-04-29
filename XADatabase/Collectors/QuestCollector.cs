@@ -77,6 +77,7 @@ public static class QuestCollector
         ("Dawntrail", "Seekers of Eternity", 70842),
         ("Dawntrail", "The Promise of Tomorrow", 70909),
         ("Dawntrail", "The Mist", 70970),
+        ("Dawntrail", "Trail to the Heavens", 71010),
     };
 
     public static unsafe List<ActiveQuestEntry> CollectActiveQuests(IDataManager dataManager)

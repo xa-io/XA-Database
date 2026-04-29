@@ -485,8 +485,10 @@ public partial class MainWindow
 
                 results.Add(new ItemLocationResult
                 {
+                    ContentId = snapshot.Row.ContentId,
                     CharacterName = snapshot.Row.CharacterName,
                     World = snapshot.Row.World,
+                    UpdatedUtc = snapshot.Row.UpdatedUtc,
                     ContainerName = item.ContainerName,
                     ItemId = item.ItemId,
                     ItemName = item.ItemName,
@@ -502,8 +504,10 @@ public partial class MainWindow
 
                 results.Add(new ItemLocationResult
                 {
+                    ContentId = snapshot.Row.ContentId,
                     CharacterName = snapshot.Row.CharacterName,
                     World = snapshot.Row.World,
+                    UpdatedUtc = snapshot.Row.UpdatedUtc,
                     ContainerName = $"Retainer: {item.RetainerName}",
                     ItemId = item.ItemId,
                     ItemName = item.ItemName,

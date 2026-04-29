@@ -6,11 +6,13 @@ A Dalamud plugin for FINAL FANTASY XIV that collects character data — inventor
 
 ## Key Features
 
+- **Plugin Operations** - Utility settings include `Open Plugin on Load` and a default-on `Show Version in Window Title` toggle that keeps the current XA Database version visible unless you turn it off.
+
 - **Offline Character Browser** — Browse saved characters anytime with name and world filters.
 - **Full Inventory Tracking** — Track equipped gear, armoury, saddlebags, crystals, and more.
-- **Cross-Character Search** — Search items across characters, retainers, and saddlebags.
-- **Currency Tracking** — Track gil, master-only FC chest gil, and major currencies from live wallet and container data.
-- **Job Levels** — View all combat, crafting, and gathering job levels in sortable tables.
+- **Cross-Character Search** — Search items across characters, retainers, and saddlebags, show owned location totals directly in live item tooltips, reuse the same recent-first ownership summary on Search tab hover, and jump straight into an exact search from the XA `Search For Item` inventory right-click action.
+- **Currency Tracking** — Track gil, master-only FC chest gil, and expanded common, battle, other, and society currencies from live wallet and container data.
+- **Job Levels** — View all combat, limited, crafting, and gathering job levels in sortable tables, including Beastmaster.
 - **Retainer Management** — Review retainer inventory, ventures, market listings, and sale status.
 - **Free Company** — Save FC name, rank, members, points, master-only chest gil, squadron, and workshop voyage data.
 - **Housing** — Track personal, shared, and apartment housing with cleaner normalization.

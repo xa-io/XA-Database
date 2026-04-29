@@ -58,6 +58,51 @@ public partial class MainWindow
         }
         ImGui.TextDisabled("Opens XA Database when the plugin loads and when the character logs in.");
 
+        var showVersionInWindowTitle = plugin.Configuration.ShowVersionInWindowTitle;
+        if (ImGui.Checkbox("Show Version in Window Title", ref showVersionInWindowTitle))
+        {
+            plugin.Configuration.ShowVersionInWindowTitle = showVersionInWindowTitle;
+            plugin.Configuration.ShowVersionInWindowTitleDefaultApplied = true;
+            plugin.Configuration.Save();
+        }
+        ImGui.TextDisabled("Appends the current version number to the main XA Database window title bar.");
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        ImGui.TextColored(new Vector4(0.4f, 0.8f, 1.0f, 1.0f), "Search");
+        ImGui.Spacing();
+
+        var searchHoverTooltipEnabled = plugin.Configuration.SearchHoverTooltipEnabled;
+        if (ImGui.Checkbox("Enable item location tooltip", ref searchHoverTooltipEnabled))
+        {
+            plugin.Configuration.SearchHoverTooltipEnabled = searchHoverTooltipEnabled;
+            plugin.Configuration.Save();
+        }
+        ImGui.TextDisabled("Shows XA-owned item totals and recent character locations in live item tooltips, and reuses the same summary on Search tab hover.");
+
+        var hoverCharacterLimit = plugin.Configuration.SearchHoverTooltipCharacterLimit;
+        ImGui.BeginDisabled(!searchHoverTooltipEnabled);
+        ImGui.SetNextItemWidth(Scale(220f));
+        if (ImGui.SliderInt("Tooltip character limit", ref hoverCharacterLimit, 1, 25))
+        {
+            plugin.Configuration.SearchHoverTooltipCharacterLimit = hoverCharacterLimit;
+            plugin.Configuration.Save();
+        }
+        ImGui.EndDisabled();
+        ImGui.TextDisabled("Controls how many characters are listed in the tooltip summary. Newest `xa.db` snapshots are shown first.");
+
+        var searchItemContextMenuEnabled = plugin.Configuration.SearchItemContextMenuEnabled;
+        if (ImGui.Checkbox("Add search item option to inventory right-click menus", ref searchItemContextMenuEnabled))
+        {
+            var applied = plugin.ItemSearchContextMenu.SetEnabled(searchItemContextMenuEnabled);
+            plugin.Configuration.SearchItemContextMenuEnabled = applied;
+            plugin.Configuration.Save();
+        }
+        ImGui.TextDisabled("Adds an XA Search For Item action to supported inventory context menus and routes the exact item into XA Database search.");
+        ImGui.TextDisabled(plugin.ItemSearchContextMenu.StatusText);
+
         // ── Auto-Save ──
         ImGui.Spacing();
         ImGui.Separator();
@@ -294,7 +339,7 @@ public partial class MainWindow
                 ExportService.WriteExport(basePath, "all_characters", "currencies.csv",
                     ExportService.BuildMasterCsv("Category,Name,Amount,Cap", allCurr, ExportService.FmtCurrency));
                 ExportService.WriteExport(basePath, "all_characters", "jobs.csv",
-                    ExportService.BuildMasterCsv("Abbreviation,Name,Category,Level,IsUnlocked", allJobs, ExportService.FmtJob));
+                    ExportService.BuildMasterCsv("Abbreviation,Name,Category,Level,LevelCap,IsUnlocked", allJobs, ExportService.FmtJob));
                 ExportService.WriteExport(basePath, "all_characters", "inventory.csv",
                     ExportService.BuildMasterCsv("Container,UsedSlots,TotalSlots", allInv, ExportService.FmtInventory));
                 ExportService.WriteExport(basePath, "all_characters", "items.csv",

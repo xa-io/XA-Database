@@ -395,7 +395,8 @@ public sealed class AutoCollectionService : IDisposable
             AtkValue* atkValues = stackalloc AtkValue[callbackValues.Length];
             for (int i = 0; i < callbackValues.Length; i++)
             {
-                atkValues[i].Type = (FFXIVClientStructs.FFXIV.Component.GUI.ValueType)3;
+                atkValues[i] = default;
+                atkValues[i].Type = AtkValueType.Int;
                 atkValues[i].Int = callbackValues[i];
             }
 

@@ -29,6 +29,7 @@ public static class JobCollector
         ("Melee DPS", 34), // SAM
         ("Melee DPS", 39), // RPR
         ("Melee DPS", 41), // VPR
+        ("Melee DPS", 43), // BST
 
         // Ranged DPS
         ("Ranged DPS", 23), // BRD
@@ -74,8 +75,9 @@ public static class JobCollector
 
             var abbr = (classJob.Abbreviation.ToString() ?? string.Empty).Trim().ToUpperInvariant();
             var name = (classJob.Name.ToString() ?? string.Empty).Trim().ToUpperInvariant();
+            var levelCap = Models.JobLevelCaps.ForAbbreviation(abbr);
 
-            short level = playerState.GetClassJobLevel(classJob);
+            var level = playerState.GetClassJobLevel(classJob);
             bool isUnlocked = level > 0;
 
             results.Add(new Models.JobEntry
@@ -84,6 +86,7 @@ public static class JobCollector
                 Name = name,
                 Category = category,
                 Level = level,
+                LevelCap = levelCap,
                 IsUnlocked = isUnlocked,
             });
         }

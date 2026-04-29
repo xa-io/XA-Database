@@ -40,9 +40,9 @@ public static class ExportService
     public static string ExportJobsCsv(List<JobEntry> data)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("Abbreviation,Name,Category,Level,IsUnlocked");
+        sb.AppendLine("Abbreviation,Name,Category,Level,LevelCap,IsUnlocked");
         foreach (var j in data)
-            sb.AppendLine($"{CsvEscape(j.Abbreviation)},{CsvEscape(j.Name)},{CsvEscape(j.Category)},{j.Level},{j.IsUnlocked}");
+            sb.AppendLine($"{CsvEscape(j.Abbreviation)},{CsvEscape(j.Name)},{CsvEscape(j.Category)},{j.Level},{j.LevelCap},{j.IsUnlocked}");
         return sb.ToString();
     }
 
@@ -120,7 +120,7 @@ public static class ExportService
 
     // Row formatters for master CSV
     public static string FmtCurrency(CurrencyEntry c) => $"{CsvEscape(c.Category)},{CsvEscape(c.Name)},{c.Amount},{c.Cap}";
-    public static string FmtJob(JobEntry j) => $"{CsvEscape(j.Abbreviation)},{CsvEscape(j.Name)},{CsvEscape(j.Category)},{j.Level},{j.IsUnlocked}";
+    public static string FmtJob(JobEntry j) => $"{CsvEscape(j.Abbreviation)},{CsvEscape(j.Name)},{CsvEscape(j.Category)},{j.Level},{j.LevelCap},{j.IsUnlocked}";
     public static string FmtInventory(InventorySummary i) => $"{CsvEscape(i.Name)},{i.UsedSlots},{i.TotalSlots}";
     public static string FmtItem(ContainerItemEntry i) => $"{CsvEscape(i.ContainerName)},{CsvEscape(i.ItemName)},{i.ItemId},{i.Quantity},{i.IsHq},{i.SlotIndex}";
     public static string FmtRetainer(RetainerEntry r) => $"{CsvEscape(r.Name)},{r.Level},{r.Gil},{r.ItemCount},{r.MarketItemCount},{CsvEscape(r.Town)},{CsvEscape(r.VentureStatus)},{CsvEscape(r.VentureEta)}";

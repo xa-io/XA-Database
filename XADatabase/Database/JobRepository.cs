@@ -68,12 +68,15 @@ public class JobRepository
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
+            var abbreviation = reader["abbreviation"].ToString() ?? "";
+            var levelCap = JobLevelCaps.ForAbbreviation(abbreviation);
             results.Add(new JobEntry
             {
-                Abbreviation = reader["abbreviation"].ToString() ?? "",
+                Abbreviation = abbreviation,
                 Name = reader["name"].ToString() ?? "",
                 Category = reader["category"].ToString() ?? "",
                 Level = Convert.ToInt32(reader["level"]),
+                LevelCap = levelCap,
                 IsUnlocked = Convert.ToInt32(reader["is_unlocked"]) == 1,
             });
         }

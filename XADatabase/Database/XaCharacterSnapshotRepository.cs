@@ -498,13 +498,21 @@ public sealed class XaCharacterSnapshotRepository
 
     private static List<JobEntry> NormalizeJobs(IEnumerable<JobEntry> jobs)
     {
-        return jobs.Select(job => new JobEntry
+        return jobs.Select(job =>
         {
-            Abbreviation = NormalizeUpper(job.Abbreviation),
-            Name = NormalizeUpper(job.Name),
-            Category = job.Category,
-            Level = job.Level,
-            IsUnlocked = job.IsUnlocked,
+            var abbreviation = NormalizeUpper(job.Abbreviation);
+            var levelCap = JobLevelCaps.ForAbbreviation(
+                abbreviation,
+                job.LevelCap > 0 ? job.LevelCap : JobLevelCaps.Default);
+            return new JobEntry
+            {
+                Abbreviation = abbreviation,
+                Name = NormalizeUpper(job.Name),
+                Category = job.Category,
+                Level = job.Level,
+                LevelCap = levelCap,
+                IsUnlocked = job.IsUnlocked,
+            };
         }).ToList();
     }
 

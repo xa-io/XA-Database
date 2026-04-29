@@ -59,6 +59,8 @@ public partial class MainWindow : Window, IDisposable
     // Item search state
     private string itemSearchText = string.Empty;
     private List<ItemLocationResult> itemSearchResults = new();
+    private SearchItemRequest? activeExactItemSearch;
+    private bool selectSearchTabOnNextDraw;
 
     // Retainers tab: show all retainers with collapsible sections
     private bool showAllRetainers;
@@ -99,7 +101,12 @@ public partial class MainWindow : Window, IDisposable
     public void Dispose() { }
 
     public override void PreDraw()
-        => UpdateSizeConstraints(UiScale);
+    {
+        UpdateSizeConstraints(UiScale);
+        WindowName = plugin.Configuration.ShowVersionInWindowTitle
+            ? $"XA Database v{PluginVersion}###MainWindow"
+            : "XA Database###MainWindow";
+    }
 
     private static float UiScale => ImGuiHelpers.GlobalScale;
 
@@ -107,6 +114,11 @@ public partial class MainWindow : Window, IDisposable
 
     private static float Scale(float value)
         => value * UiScale;
+
+    private void RefreshItemTooltipCache()
+    {
+        plugin.ItemLocationTooltip.RefreshCache();
+    }
 
     private static Vector2 ScaledVector(float x, float y)
         => ImGuiHelpers.ScaledVector2(x, y);
@@ -951,6 +963,7 @@ public partial class MainWindow : Window, IDisposable
             // Refresh known characters list (after commit)
             knownCharacters = plugin.CharacterRepo.GetAll();
             InvalidateDashboardSnapshotCache();
+            RefreshItemTooltipCache();
             var savedSnapshot = plugin.SnapshotRepo.GetSnapshot(contentId);
             if (savedSnapshot != null)
                 ApplySnapshotToCache(savedSnapshot);
@@ -1224,6 +1237,7 @@ public partial class MainWindow : Window, IDisposable
             }
             knownCharacters = plugin.CharacterRepo.GetAll();
             InvalidateDashboardSnapshotCache();
+            RefreshItemTooltipCache();
             charListQueried = true;
             RefreshMigrationState();
             SetMigrationStatus($"Imported {characters.Count} legacy characters into xa_characters and removed legacy tables.");
@@ -1244,6 +1258,7 @@ public partial class MainWindow : Window, IDisposable
             plugin.DatabaseService.ClearAllCharacterData();
             knownCharacters.Clear();
             InvalidateDashboardSnapshotCache();
+            RefreshItemTooltipCache();
             charListQueried = false;
             itemSearchResults.Clear();
             cachedCurrencies.Clear();
@@ -1414,6 +1429,7 @@ public partial class MainWindow : Window, IDisposable
                 ? knownCharacters.FindIndex(c => c.ContentId == viewingContentId.Value)
                 : -1;
             InvalidateDashboardSnapshotCache();
+            RefreshItemTooltipCache();
             RefreshMigrationState();
 
             Plugin.Log.Information($"[XA] Deleted character snapshot for {characterLabel} (cid={contentId}).");
@@ -1712,3 +1728,5 @@ public sealed class CollectorValidationSummary
     public bool QuestsCollected { get; init; }
     public List<string> Warnings { get; init; } = new();
 }
+
+internal sealed record SearchItemRequest(uint ItemId, bool IsHq, string ItemName);
