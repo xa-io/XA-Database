@@ -242,5 +242,5 @@ public sealed class Plugin : IDalamudPlugin
 
 internal static class BuildInfo
 {
-    public const string Version = "0.0.0.31";
+    public const string Version = "0.0.0.32";
 }
