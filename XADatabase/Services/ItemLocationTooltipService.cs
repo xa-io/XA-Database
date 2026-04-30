@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using Dalamud.Game.Text.SeStringHandling;
 using Dalamud.Game.Text.SeStringHandling.Payloads;
 using Dalamud.Hooking;
@@ -8,6 +9,7 @@ using Dalamud.Memory;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using XADatabase.Database;
+using XADatabase.Models;
 
 namespace XADatabase.Services;
 
@@ -23,7 +25,9 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
     private readonly object syncRoot = new();
     private readonly Hook<GenerateItemTooltipDelegate>? generateItemTooltipHook;
 
+    private readonly Dictionary<ulong, CachedCharacterTooltipSnapshot> cachedSnapshotItems = new();
     private Dictionary<ItemTooltipKey, OwnedItemTooltipSummary> cachedSummaries = new();
+    private int cacheGeneration;
     private bool disposed;
 
     private delegate void* GenerateItemTooltipDelegate(
@@ -70,48 +74,82 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
         try
         {
             var snapshots = plugin.SnapshotRepo.GetAllSnapshots();
-            var items = new Dictionary<ItemTooltipKey, ItemTooltipAccumulator>();
-
-            foreach (var snapshot in snapshots)
-            {
-                foreach (var item in snapshot.AllItems)
-                {
-                    AccumulateItem(
-                        items,
-                        snapshot,
-                        item.ItemId,
-                        item.IsHq,
-                        item.ItemName,
-                        item.Quantity,
-                        SimplifyTooltipLocation(item.ContainerName));
-                }
-
-                foreach (var item in snapshot.RetainerItems)
-                {
-                    AccumulateItem(
-                        items,
-                        snapshot,
-                        item.ItemId,
-                        item.IsHq,
-                        item.ItemName,
-                        item.Quantity,
-                        "Retainers");
-                }
-            }
-
-            var rebuilt = items.ToDictionary(
-                pair => pair.Key,
-                pair => pair.Value.ToSummary());
+            var snapshotItems = snapshots.ToDictionary(
+                snapshot => snapshot.Row.ContentId,
+                CreateCachedSnapshot);
+            var rebuilt = BuildSummaries(snapshotItems.Values);
 
             lock (syncRoot)
             {
+                cachedSnapshotItems.Clear();
+                foreach (var (contentId, snapshot) in snapshotItems)
+                    cachedSnapshotItems[contentId] = snapshot;
+
                 cachedSummaries = rebuilt;
+                cacheGeneration++;
             }
         }
         catch (Exception ex)
         {
             log.Warning(ex, "[XA] Failed to rebuild the item tooltip cache.");
         }
+    }
+
+    public void UpdateCharacterSnapshot(
+        ulong contentId,
+        string characterName,
+        string world,
+        string updatedUtc,
+        IEnumerable<ContainerItemEntry> allItems,
+        IEnumerable<RetainerInventoryItem> retainerItems)
+    {
+        if (contentId == 0)
+            return;
+
+        var snapshot = new CachedCharacterTooltipSnapshot(
+            contentId,
+            characterName,
+            world,
+            updatedUtc,
+            allItems.Select(item => new CachedTooltipItem(
+                item.ItemId,
+                item.IsHq,
+                item.ItemName,
+                item.Quantity,
+                SimplifyTooltipLocation(item.ContainerName))).ToList(),
+            retainerItems.Select(item => new CachedTooltipItem(
+                item.ItemId,
+                item.IsHq,
+                item.ItemName,
+                item.Quantity,
+                "Retainers")).ToList());
+
+        List<CachedCharacterTooltipSnapshot> snapshots;
+        int generation;
+        lock (syncRoot)
+        {
+            cachedSnapshotItems[contentId] = snapshot;
+            snapshots = cachedSnapshotItems.Values.ToList();
+            generation = ++cacheGeneration;
+        }
+
+        _ = Task.Run(() => BuildSummaries(snapshots)).ContinueWith(task =>
+        {
+            if (task.IsFaulted)
+            {
+                log.Warning(task.Exception, "[XA] Failed to refresh the item tooltip cache from the saved snapshot.");
+                return;
+            }
+
+            if (task.IsCanceled)
+                return;
+
+            lock (syncRoot)
+            {
+                if (generation == cacheGeneration)
+                    cachedSummaries = task.Result;
+            }
+        }, TaskScheduler.Default);
     }
 
     public bool TryGetSummary(uint itemId, bool isHq, out OwnedItemTooltipSummary summary)
@@ -272,30 +310,65 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
         return itemId != 0;
     }
 
+    private static Dictionary<ItemTooltipKey, OwnedItemTooltipSummary> BuildSummaries(IEnumerable<CachedCharacterTooltipSnapshot> snapshots)
+    {
+        var items = new Dictionary<ItemTooltipKey, ItemTooltipAccumulator>();
+
+        foreach (var snapshot in snapshots)
+        {
+            foreach (var item in snapshot.AllItems)
+                AccumulateItem(items, snapshot, item);
+
+            foreach (var item in snapshot.RetainerItems)
+                AccumulateItem(items, snapshot, item);
+        }
+
+        return items.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value.ToSummary());
+    }
+
+    private static CachedCharacterTooltipSnapshot CreateCachedSnapshot(XaCharacterSnapshotData snapshot)
+    {
+        return new CachedCharacterTooltipSnapshot(
+            snapshot.Row.ContentId,
+            snapshot.Row.CharacterName,
+            snapshot.Row.World,
+            snapshot.Row.UpdatedUtc,
+            snapshot.AllItems.Select(item => new CachedTooltipItem(
+                item.ItemId,
+                item.IsHq,
+                item.ItemName,
+                item.Quantity,
+                SimplifyTooltipLocation(item.ContainerName))).ToList(),
+            snapshot.RetainerItems.Select(item => new CachedTooltipItem(
+                item.ItemId,
+                item.IsHq,
+                item.ItemName,
+                item.Quantity,
+                "Retainers")).ToList());
+    }
+
     private static void AccumulateItem(
         Dictionary<ItemTooltipKey, ItemTooltipAccumulator> items,
-        XaCharacterSnapshotData snapshot,
-        uint itemId,
-        bool isHq,
-        string itemName,
-        int quantity,
-        string locationName)
+        CachedCharacterTooltipSnapshot snapshot,
+        CachedTooltipItem item)
     {
-        if (itemId == 0 || quantity <= 0)
+        if (item.ItemId == 0 || item.Quantity <= 0)
             return;
 
-        var key = new ItemTooltipKey(itemId, isHq);
+        var key = new ItemTooltipKey(item.ItemId, item.IsHq);
         if (!items.TryGetValue(key, out var itemAccumulator))
         {
-            itemAccumulator = new ItemTooltipAccumulator(itemId, isHq, itemName);
+            itemAccumulator = new ItemTooltipAccumulator(item.ItemId, item.IsHq, item.ItemName);
             items[key] = itemAccumulator;
         }
-        else if (string.IsNullOrWhiteSpace(itemAccumulator.ItemName) && !string.IsNullOrWhiteSpace(itemName))
+        else if (string.IsNullOrWhiteSpace(itemAccumulator.ItemName) && !string.IsNullOrWhiteSpace(item.ItemName))
         {
-            itemAccumulator.ItemName = itemName;
+            itemAccumulator.ItemName = item.ItemName;
         }
 
-        itemAccumulator.Add(snapshot.Row.ContentId, snapshot.Row.CharacterName, snapshot.Row.World, snapshot.Row.UpdatedUtc, quantity, locationName);
+        itemAccumulator.Add(snapshot.ContentId, snapshot.CharacterName, snapshot.World, snapshot.UpdatedUtc, item.Quantity, item.LocationName);
     }
 
     private static string SimplifyTooltipLocation(string containerName)
@@ -340,6 +413,21 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
     }
 
     private readonly record struct ItemTooltipKey(uint ItemId, bool IsHq);
+
+    private sealed record CachedCharacterTooltipSnapshot(
+        ulong ContentId,
+        string CharacterName,
+        string World,
+        string UpdatedUtc,
+        List<CachedTooltipItem> AllItems,
+        List<CachedTooltipItem> RetainerItems);
+
+    private readonly record struct CachedTooltipItem(
+        uint ItemId,
+        bool IsHq,
+        string ItemName,
+        int Quantity,
+        string LocationName);
 
     private sealed class ItemTooltipAccumulator
     {

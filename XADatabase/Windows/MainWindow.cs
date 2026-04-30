@@ -89,6 +89,11 @@ public partial class MainWindow : Window, IDisposable
     private bool legacyMigrationPending;
     private int legacyCharacterCount;
     private int xaCharacterSnapshotCount;
+    private bool refreshAndSaveQueued;
+    private SnapshotTrigger queuedRefreshAndSaveTrigger = SnapshotTrigger.Manual;
+    private string queuedRefreshAndSaveDetail = string.Empty;
+    private ulong lastPersistedSnapshotContentId;
+    private XaCharacterSnapshotData? lastPersistedSnapshot;
 
     public MainWindow(Plugin plugin)
         : base("XA Database##MainWindow", ImGuiWindowFlags.None)
@@ -118,6 +123,17 @@ public partial class MainWindow : Window, IDisposable
     private void RefreshItemTooltipCache()
     {
         plugin.ItemLocationTooltip.RefreshCache();
+    }
+
+    private void RefreshItemTooltipCacheForCurrentSnapshot(ulong contentId, string characterName, string world, string updatedUtc)
+    {
+        plugin.ItemLocationTooltip.UpdateCharacterSnapshot(
+            contentId,
+            characterName,
+            world,
+            updatedUtc,
+            cachedItems,
+            cachedRetainerItems);
     }
 
     private static Vector2 ScaledVector(float x, float y)
@@ -563,6 +579,8 @@ public partial class MainWindow : Window, IDisposable
             cachedApartment = housing.Apartment;
 
             var persistedSnapshot = plugin.SnapshotRepo.GetSnapshot(playerState.ContentId);
+            lastPersistedSnapshotContentId = playerState.ContentId;
+            lastPersistedSnapshot = persistedSnapshot;
             JournalCollector.SeedPersistedValue(persistedSnapshot?.Currencies);
             JournalCollector.TryCollectFromOpenAddon();
             JournalCollector.ApplyToCurrencies(cachedCurrencies);
@@ -723,6 +741,40 @@ public partial class MainWindow : Window, IDisposable
         return SaveToDatabase(trigger, triggerDetail);
     }
 
+    public SaveSnapshotResult QueueRefreshAndSave(SnapshotTrigger trigger = SnapshotTrigger.Manual, string triggerDetail = "Manual refresh")
+    {
+        refreshAndSaveQueued = true;
+        queuedRefreshAndSaveTrigger = trigger;
+        queuedRefreshAndSaveDetail = triggerDetail;
+
+        var queuedResult = new SaveSnapshotResult
+        {
+            Success = false,
+            Pending = true,
+            Trigger = trigger,
+            TriggerDetail = triggerDetail,
+            SavedAtUtc = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"),
+            Summary = $"Snapshot save queued: {triggerDetail}",
+            Quality = "Saving"
+        };
+
+        lastSnapshotResult = queuedResult;
+        AddTaskLog($"[XA.DB TASK] Queued snapshot save via {trigger}: {triggerDetail}");
+        return queuedResult;
+    }
+
+    public void ProcessDeferredWork()
+    {
+        if (!refreshAndSaveQueued)
+            return;
+
+        var trigger = queuedRefreshAndSaveTrigger;
+        var detail = queuedRefreshAndSaveDetail;
+        refreshAndSaveQueued = false;
+        queuedRefreshAndSaveDetail = string.Empty;
+        RefreshAndSave(trigger, detail);
+    }
+
     /// <summary>
     /// Called by AddonWatcher when a tracked game window opens.
     /// For Workshop: collects voyage data immediately (only available while panel is open).
@@ -810,8 +862,8 @@ public partial class MainWindow : Window, IDisposable
             QueueCollectorWarning(closeCollectorFailure);
 
         AddTaskLog($"[XA.DB TASK] Addon close trigger: {trigger.Category} / {trigger.AddonName}");
-        Plugin.Log.Information($"[XA] Addon trigger ({trigger.Category}) — refreshing and saving.");
-        RefreshAndSave(SnapshotTrigger.AddonWatcher, trigger.TriggerDetail);
+        Plugin.Log.Information($"[XA] Addon trigger ({trigger.Category}) — queueing refresh and save.");
+        QueueRefreshAndSave(SnapshotTrigger.AddonWatcher, trigger.TriggerDetail);
     }
 
     public SaveSnapshotResult SaveToDatabase(SnapshotTrigger trigger = SnapshotTrigger.Manual, string triggerDetail = "Manual save")
@@ -856,7 +908,9 @@ public partial class MainWindow : Window, IDisposable
             var hasReliableLiveCharacterContext = localPlayer != null
                 && !Plugin.Condition[ConditionFlag.BetweenAreas]
                 && !Plugin.Condition[ConditionFlag.BetweenAreas51];
-            var persistedSnapshot = plugin.SnapshotRepo.GetSnapshot(contentId);
+            var persistedSnapshot = lastPersistedSnapshotContentId == contentId
+                ? lastPersistedSnapshot
+                : plugin.SnapshotRepo.GetSnapshot(contentId);
             JournalCollector.SeedPersistedValue(persistedSnapshot?.Currencies);
             JournalCollector.ApplyToCurrencies(cachedCurrencies);
             if (string.IsNullOrEmpty(cachedPersonalEstate) && !hasReliableLiveCharacterContext && persistedSnapshot != null)
@@ -960,13 +1014,11 @@ public partial class MainWindow : Window, IDisposable
                 throw;
             }
 
-            // Refresh known characters list (after commit)
-            knownCharacters = plugin.CharacterRepo.GetAll();
+            UpsertKnownCharacterCache(contentId, name, world, datacenter, region, savedAtUtc);
+            lastPersistedSnapshotContentId = 0;
+            lastPersistedSnapshot = null;
             InvalidateDashboardSnapshotCache();
-            RefreshItemTooltipCache();
-            var savedSnapshot = plugin.SnapshotRepo.GetSnapshot(contentId);
-            if (savedSnapshot != null)
-                ApplySnapshotToCache(savedSnapshot);
+            RefreshItemTooltipCacheForCurrentSnapshot(contentId, name, world, savedAtUtc);
 
             var result = new SaveSnapshotResult
             {
@@ -988,7 +1040,6 @@ public partial class MainWindow : Window, IDisposable
             };
             result.Quality = GetSnapshotQualityLabel(result);
             lastSnapshotResult = result;
-            RefreshMigrationState();
 
             Plugin.Log.Information($"[XA] Saved snapshot for {name} @ {world} to database.");
             AddTaskLog($"[XA.DB TASK] Saved snapshot for {name} @ {world} via {trigger} ({result.Quality}).");
@@ -1029,6 +1080,42 @@ public partial class MainWindow : Window, IDisposable
             AddSaveHistoryEntry(result);
             return result;
         }
+    }
+
+    private void UpsertKnownCharacterCache(
+        ulong contentId,
+        string name,
+        string world,
+        string datacenter,
+        string region,
+        string savedAtUtc)
+    {
+        var row = knownCharacters.Find(c => c.ContentId == contentId);
+        if (row == null)
+        {
+            row = new CharacterRow
+            {
+                ContentId = contentId,
+                CreatedUtc = savedAtUtc,
+            };
+            knownCharacters.Add(row);
+        }
+
+        row.Name = name;
+        row.World = world;
+        row.Datacenter = datacenter;
+        row.Region = region;
+        row.LastSeenUtc = savedAtUtc;
+        row.PersonalEstate = cachedPersonalEstate;
+        row.SharedEstates = cachedSharedEstates;
+        row.Apartment = cachedApartment;
+
+        knownCharacters = knownCharacters
+            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(c => c.World, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        charListQueried = true;
+        xaCharacterSnapshotCount = Math.Max(xaCharacterSnapshotCount, knownCharacters.Count);
     }
 
     private CollectorValidationSummary BuildValidationSummary(bool isOnHomeworld)
@@ -1507,7 +1594,7 @@ public partial class MainWindow : Window, IDisposable
         if (isLoggedIn)
         {
             if (ImGui.Button("Refresh + Save"))
-                RefreshAndSave();
+                QueueRefreshAndSave();
             if (knownCharacters.Count > 0 && !showLegacyWarning)
                 ImGui.SameLine();
         }
@@ -1663,7 +1750,7 @@ public partial class MainWindow : Window, IDisposable
             ImGui.SameLine();
             ImGui.TextDisabled("|");
             ImGui.SameLine();
-            ImGui.TextDisabled(lastSnapshotResult.Success ? lastSnapshotResult.Trigger.ToString() : "Save failed");
+            ImGui.TextDisabled(lastSnapshotResult.Pending ? "Save queued" : lastSnapshotResult.Success ? lastSnapshotResult.Trigger.ToString() : "Save failed");
             ImGui.SameLine();
             ImGui.TextDisabled("|");
             ImGui.SameLine();
@@ -1702,6 +1789,7 @@ public sealed class SaveSnapshotResult
 {
     public int PayloadVersion { get; init; } = IpcContractInfo.LastSnapshotResultJsonVersion;
     public bool Success { get; init; }
+    public bool Pending { get; init; }
     public ulong ContentId { get; init; }
     public string CharacterName { get; init; } = string.Empty;
     public string HomeWorld { get; init; } = string.Empty;

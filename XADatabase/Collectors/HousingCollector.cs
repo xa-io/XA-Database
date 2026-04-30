@@ -138,7 +138,7 @@ public static class HousingCollector
         try
         {
             var hsb = AtkStage.Instance()->RaptureAtkUnitManager->GetAddonByName("HousingSignBoard");
-            if (hsb != null && hsb->IsVisible)
+            if (hsb != null && hsb->IsVisible && hsb->IsReady)
                 CollectFromAddon((nint)hsb);
         }
         catch (Exception ex)
@@ -418,7 +418,7 @@ public static class HousingCollector
     {
         texts = new List<(string Path, uint NodeId, string Text)>();
         var addon = AtkStage.Instance()->RaptureAtkUnitManager->GetAddonByName(addonName);
-        if (addon == null || !addon->IsVisible)
+        if (addon == null || !addon->IsVisible || !addon->IsReady)
             return false;
 
         texts = AddonTextReader.ReadAllText(addon);

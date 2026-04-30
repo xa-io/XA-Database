@@ -81,7 +81,7 @@ public static class JournalCollector
             return;
 
         var addon = stage->RaptureAtkUnitManager->GetAddonByName(JournalAddonName);
-        if (addon == null || !addon->IsVisible)
+        if (addon == null || !addon->IsVisible || !addon->IsReady)
             return;
 
         CollectFromAddon(addon);

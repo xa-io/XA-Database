@@ -317,7 +317,7 @@ public sealed class AutoCollectionService : IDisposable
     private unsafe bool IsAddonReady(string name)
     {
         var addon = GetAddon(name);
-        return addon != null && addon->IsVisible;
+        return addon != null && addon->IsVisible && addon->IsReady;
     }
 
     private unsafe void CloseAddon(string name)
@@ -344,9 +344,15 @@ public sealed class AutoCollectionService : IDisposable
             return;
         }
 
-        if (!addon->IsVisible || nodeListIndex >= addon->UldManager.NodeListCount)
+        if (!addon->IsVisible || !addon->IsReady)
         {
-            log.Warning($"[XA] ClickAddonNode: addon '{addonName}' not visible or index {nodeListIndex} out of range (max {addon->UldManager.NodeListCount}).");
+            log.Warning($"[XA] ClickAddonNode: addon '{addonName}' not visible or not ready.");
+            return;
+        }
+
+        if (nodeListIndex >= addon->UldManager.NodeListCount)
+        {
+            log.Warning($"[XA] ClickAddonNode: index {nodeListIndex} out of range for addon '{addonName}' (max {addon->UldManager.NodeListCount}).");
             return;
         }
 
@@ -384,9 +390,9 @@ public sealed class AutoCollectionService : IDisposable
     private unsafe void FireAddonCallback(string addonName, params int[] callbackValues)
     {
         var addon = GetAddon(addonName);
-        if (addon == null || !addon->IsVisible)
+        if (addon == null || !addon->IsVisible || !addon->IsReady)
         {
-            log.Warning($"[XA] FireAddonCallback: addon '{addonName}' not found or not visible.");
+            log.Warning($"[XA] FireAddonCallback: addon '{addonName}' not found, not visible, or not ready.");
             return;
         }
 

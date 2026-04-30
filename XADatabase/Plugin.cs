@@ -197,6 +197,8 @@ public sealed class Plugin : IDalamudPlugin
             lastAutoSave = DateTime.UtcNow;
         }
 
+        MainWindow.ProcessDeferredWork();
+
         // Auto-save timer — moved from Draw() to avoid HITCH warnings
         var autoInterval = Configuration.AutoSaveIntervalMinutes;
         if (autoInterval > 0 && MainWindow.DataCollected)
@@ -204,9 +206,9 @@ public sealed class Plugin : IDalamudPlugin
             var elapsed = DateTime.UtcNow - lastAutoSave;
             if (elapsed.TotalMinutes >= autoInterval)
             {
-                MainWindow.RefreshAndSave(SnapshotTrigger.AutoSaveTimer, $"{autoInterval}m interval");
+                MainWindow.QueueRefreshAndSave(SnapshotTrigger.AutoSaveTimer, $"{autoInterval}m interval");
                 lastAutoSave = DateTime.UtcNow;
-                Log.Information($"[XA] Auto-save triggered ({autoInterval}m interval).");
+                Log.Information($"[XA] Auto-save queued ({autoInterval}m interval).");
             }
         }
     }
@@ -242,5 +244,5 @@ public sealed class Plugin : IDalamudPlugin
 
 internal static class BuildInfo
 {
-    public const string Version = "0.0.0.32";
+    public const string Version = "0.0.0.33";
 }

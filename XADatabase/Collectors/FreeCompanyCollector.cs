@@ -98,10 +98,8 @@ public static class FreeCompanyCollector
         if (string.IsNullOrEmpty(fcTag) && !string.IsNullOrEmpty(LastFcTag))
             fcTag = LastFcTag;
 
-        // Custom FC rank names: the Ranks accessor and raw pointer reads at 0x178 both
-        // return garbage in our SDK version (Dalamud.NET.Sdk 14.0.2). The struct offsets
-        // don't match the live game memory layout. Rank names will use Sort-based fallback
-        // ("Master" for Sort 0, "Rank N" for others) until a reliable API is found.
+        // Custom FC rank names: direct struct access remains untrusted until
+        // runtime-verified under API 15, so addon/fallback rank naming stays preferred.
         LastCollectedRankNames = new Dictionary<int, string>();
 
         return new FreeCompanyEntry
@@ -173,14 +171,14 @@ public static class FreeCompanyCollector
         try
         {
             var fcAddon = AtkStage.Instance()->RaptureAtkUnitManager->GetAddonByName("FreeCompany");
-            if (fcAddon != null && fcAddon->IsVisible)
+            if (fcAddon != null && fcAddon->IsVisible && fcAddon->IsReady)
             {
                 Plugin.Log.Debug("[XA] FreeCompany addon is open — reading FC points.");
                 CollectFromAddon((nint)fcAddon);
             }
 
             var fcChestAddon = AtkStage.Instance()->RaptureAtkUnitManager->GetAddonByName("FreeCompanyChest");
-            if (fcChestAddon != null && fcChestAddon->IsVisible)
+            if (fcChestAddon != null && fcChestAddon->IsVisible && fcChestAddon->IsReady)
             {
                 Plugin.Log.Debug("[XA] FreeCompanyChest addon is open — reading FC chest gil.");
                 CollectChestGilFromAddon((nint)fcChestAddon);
@@ -323,7 +321,7 @@ public static class FreeCompanyCollector
         try
         {
             var memberAddon = AtkStage.Instance()->RaptureAtkUnitManager->GetAddonByName("FreeCompanyMember");
-            if (memberAddon == null || !memberAddon->IsVisible) return;
+            if (memberAddon == null || !memberAddon->IsVisible || !memberAddon->IsReady) return;
 
             var allText = AddonTextReader.ReadAllText(memberAddon);
 

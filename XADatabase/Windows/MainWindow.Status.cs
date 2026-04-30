@@ -168,6 +168,8 @@ public partial class MainWindow
     {
         if (result == null)
             return "No Snapshot";
+        if (result.Pending)
+            return "Saving";
         if (!result.Success)
             return "Degraded";
         if (IsSnapshotStale(result))
@@ -182,6 +184,7 @@ public partial class MainWindow
         return result switch
         {
             null => new Vector4(0.7f, 0.7f, 0.7f, 1.0f),
+            _ when result.Pending => new Vector4(0.4f, 0.8f, 1.0f, 1.0f),
             _ when !result.Success => new Vector4(1.0f, 0.45f, 0.45f, 1.0f),
             _ when IsSnapshotStale(result) => new Vector4(1.0f, 0.75f, 0.3f, 1.0f),
             _ when result.Warnings.Count > 0 => new Vector4(1.0f, 0.9f, 0.35f, 1.0f),

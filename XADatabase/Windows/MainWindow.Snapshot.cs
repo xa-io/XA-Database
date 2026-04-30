@@ -86,6 +86,8 @@ public partial class MainWindow
         liveSessionRetainerInventoryIds.Clear();
         hasAuthoritativeLiveRetainerList = false;
         lastLiveContentId = 0;
+        lastPersistedSnapshotContentId = 0;
+        lastPersistedSnapshot = null;
         DataCollected = false;
         lastRefreshTime = DateTime.MinValue;
         FreeCompanyCollector.ClearPersistedValues();
