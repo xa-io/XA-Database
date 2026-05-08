@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Component.GUI;
+using XADatabase.Data;
 using XADatabase.Database;
 using XADatabase.Services;
 
@@ -25,24 +26,6 @@ public static class HousingCollector
     public static string LastSharedEstatesFromAddon => string.Join("\n", LastSharedEstateAddressesFromAddon);
     private static HousingSignBoardContext LastObservedEstateContext = HousingSignBoardContext.Unknown;
     private static readonly List<string> LastSharedEstateAddressesFromAddon = new();
-
-    // Plot size ranges (0-indexed plot numbers)
-    // Plots 0-29: Small(0-14 main, 15-29 sub), Medium/Large vary by ward layout
-    // Simplified: plots 0-7 in each half = Small, 8-11 = Medium, 12-14 = Large (per ward)
-    private static string GetPlotSize(byte plotIndex)
-    {
-        var localPlot = plotIndex % 30; // normalize for subdivision
-        return localPlot switch
-        {
-            >= 0 and <= 7 => "Small",
-            >= 8 and <= 11 => "Medium",
-            >= 12 and <= 14 => "Large",
-            >= 15 and <= 22 => "Small",  // subdivision small
-            >= 23 and <= 26 => "Medium", // subdivision medium
-            >= 27 and <= 29 => "Large",  // subdivision large
-            _ => "",
-        };
-    }
 
     /// <summary>
     /// Checks whether a HouseId contains valid housing data.
@@ -81,7 +64,7 @@ public static class HousingCollector
                 var ward = personalHouseId.WardIndex + 1;
                 var district = DistrictNames[personalHouseId.TerritoryTypeId];
 
-                personalEstate = $"Plot {plot}, Ward {ward}, {district}";
+                personalEstate = HousingPlotSizeData.ApplySizeSuffix($"Plot {plot}, Ward {ward}, {district}");
                 Plugin.Log.Information($"[XA] Personal Estate: {personalEstate} (TerritoryType={personalHouseId.TerritoryTypeId}, World={personalHouseId.WorldId})");
             }
             else
@@ -224,7 +207,7 @@ public static class HousingCollector
                     break;
 
                 case HousingSignBoardContext.PersonalEstate:
-                    LastPersonalEstateFromAddon = XaCharacterSnapshotRepository.StripHousingOwnerSuffix(address);
+                    LastPersonalEstateFromAddon = HousingPlotSizeData.ApplySizeSuffix(XaCharacterSnapshotRepository.StripHousingOwnerSuffix(address));
                     RemoveSharedEstateFromAddon(address);
                     Plugin.Log.Information($"[XA] Personal estate from addon: \"{LastPersonalEstateFromAddon}\"");
                     break;
@@ -265,7 +248,7 @@ public static class HousingCollector
         if (string.IsNullOrWhiteSpace(address))
             return;
 
-        var normalized = address.Trim();
+        var normalized = HousingPlotSizeData.ApplySizeSuffix(address);
         for (var i = 0; i < LastSharedEstateAddressesFromAddon.Count; i++)
         {
             var existing = LastSharedEstateAddressesFromAddon[i];
@@ -291,7 +274,7 @@ public static class HousingCollector
 
     private static string BuildSharedEstateDisplayValue(string address, string ownerName)
     {
-        var baseAddress = XaCharacterSnapshotRepository.StripHousingOwnerSuffix(address);
+        var baseAddress = HousingPlotSizeData.ApplySizeSuffix(XaCharacterSnapshotRepository.StripHousingOwnerSuffix(address));
         if (baseAddress.Length == 0)
             return string.Empty;
 

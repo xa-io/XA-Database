@@ -16,7 +16,7 @@ A Dalamud plugin for FINAL FANTASY XIV that collects character data — inventor
 - **Job Levels** — View all combat, limited, crafting, and gathering job levels in sortable tables, including Beastmaster.
 - **Retainer Management** — Review retainer inventory, ventures, market listings, and sale status.
 - **Free Company** — Save FC name, rank, members, points, master-only chest gil, squadron, and workshop voyage data.
-- **Housing** — Track personal, shared, and apartment housing with cleaner normalization.
+- **Housing** — Track personal, shared, and apartment housing with cleaner normalization; non-apartment estate sizes are normalized from a verified hardcoded table for every residential district plot.
 - **Collections & Quests** — View mounts, minions, rolls, cards, active quests, and MSQ progress.
 - **Dashboard** — Compare characters, gil, retainers, FC chest gil, ventures, market value, MSQ, and collections in one view.
 - **Safe Character Cleanup** — Delete stored character snapshots from the Dashboard or Settings only while holding `Ctrl+Shift`.

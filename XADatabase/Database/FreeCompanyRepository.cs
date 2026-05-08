@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using XADatabase.Data;
 using XADatabase.Models;
 
 namespace XADatabase.Database;
@@ -45,7 +46,7 @@ public class FreeCompanyRepository
         cmd.Parameters.AddWithValue("@total", (int)fc.TotalMembers);
         cmd.Parameters.AddWithValue("@hwid", (int)fc.HomeWorldId);
         cmd.Parameters.AddWithValue("@pts", fc.FcPoints);
-        cmd.Parameters.AddWithValue("@estate", fc.Estate ?? "");
+        cmd.Parameters.AddWithValue("@estate", HousingPlotSizeData.ApplySizeSuffix(fc.Estate ?? ""));
         cmd.Parameters.AddWithValue("@now", now);
         cmd.ExecuteNonQuery();
     }
@@ -79,7 +80,7 @@ public class FreeCompanyRepository
             TotalMembers = (ushort)Convert.ToInt32(reader["total_members"]),
             HomeWorldId = (ushort)Convert.ToInt32(reader["home_world_id"]),
             FcPoints = Convert.ToInt32(reader["fc_points"]),
-            Estate = reader["estate"].ToString() ?? "",
+            Estate = HousingPlotSizeData.ApplySizeSuffix(reader["estate"].ToString() ?? ""),
         };
     }
 
@@ -110,7 +111,7 @@ public class FreeCompanyRepository
                 TotalMembers = (ushort)Convert.ToInt32(reader["total_members"]),
                 HomeWorldId = (ushort)Convert.ToInt32(reader["home_world_id"]),
                 FcPoints = Convert.ToInt32(reader["fc_points"]),
-                Estate = reader["estate"].ToString() ?? "",
+                Estate = HousingPlotSizeData.ApplySizeSuffix(reader["estate"].ToString() ?? ""),
             });
         }
         return results;

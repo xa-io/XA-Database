@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using FFXIVClientStructs.FFXIV.Client.UI.Info;
 using FFXIVClientStructs.FFXIV.Component.GUI;
+using XADatabase.Data;
 using XADatabase.Models;
 using XADatabase.Services;
 
@@ -116,7 +117,7 @@ public static class FreeCompanyCollector
             FcPoints = LastFcPoints,
             FcGil = LastFcGil,
             FcGilObserved = HasObservedFcChestGil || LastFcGil > 0,
-            Estate = LastEstate,
+            Estate = HousingPlotSizeData.ApplySizeSuffix(LastEstate),
             Rank = proxy->Rank > 0 ? proxy->Rank : LastFcRank,
         };
     }
@@ -138,7 +139,7 @@ public static class FreeCompanyCollector
         if (LastFcGil == 0 && (fcGil > 0 || fcGilObserved))
             LastFcGil = fcGil;
         if (string.IsNullOrEmpty(LastEstate) && !string.IsNullOrEmpty(estate))
-            LastEstate = estate;
+            LastEstate = HousingPlotSizeData.ApplySizeSuffix(estate);
         if (string.IsNullOrEmpty(LastFcName) && !string.IsNullOrEmpty(fcName))
             LastFcName = fcName;
         if (string.IsNullOrEmpty(LastFcTag) && !string.IsNullOrEmpty(fcTag))
@@ -409,7 +410,7 @@ public static class FreeCompanyCollector
                     // Skip labels like "Address", "Plot Details" — actual address has commas
                     if (text.Contains(","))
                     {
-                        LastEstate = text.Trim();
+                        LastEstate = HousingPlotSizeData.ApplySizeSuffix(text.Trim());
                         Plugin.Log.Information($"[XA] Estate from {path} (#{nodeId}): \"{LastEstate}\"");
                         break;
                     }

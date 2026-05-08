@@ -284,7 +284,7 @@ public sealed class XaCharacterSnapshotRepository
         string sharedEstates,
         string apartment)
     {
-        var normalizedPersonalEstate = NormalizeHousingDisplayValue(personalEstate);
+        var normalizedPersonalEstate = NormalizeEstateDisplayValue(personalEstate);
         var normalizedApartment = NormalizeApartmentDisplayValue(apartment);
         var cleanedSharedEntries = new List<string>();
         var seenComparisonKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -331,8 +331,8 @@ public sealed class XaCharacterSnapshotRepository
 
     public static string PreferSizedPersonalEstateValue(string currentValue, string persistedValue)
     {
-        var normalizedCurrent = StripHousingOwnerSuffix(currentValue);
-        var normalizedPersisted = StripHousingOwnerSuffix(persistedValue);
+        var normalizedCurrent = NormalizeEstateDisplayValue(StripHousingOwnerSuffix(currentValue));
+        var normalizedPersisted = NormalizeEstateDisplayValue(StripHousingOwnerSuffix(persistedValue));
         if (normalizedCurrent.Length == 0)
             return normalizedPersisted;
         if (normalizedPersisted.Length == 0)
@@ -423,7 +423,7 @@ public sealed class XaCharacterSnapshotRepository
             FcName = reader["fc_name"].ToString() ?? string.Empty,
             FcTag = reader["fc_tag"].ToString() ?? string.Empty,
             FcPoints = ReadInt32(reader, "fc_points"),
-            FcEstate = reader["fc_estate"].ToString() ?? string.Empty,
+            FcEstate = HousingPlotSizeData.ApplySizeSuffix(reader["fc_estate"].ToString() ?? string.Empty),
             PersonalEstate = normalizedHousing.PersonalEstate,
             SharedEstates = normalizedHousing.SharedEstates,
             Apartment = normalizedHousing.Apartment,
@@ -747,7 +747,7 @@ public sealed class XaCharacterSnapshotRepository
     {
         return (value ?? string.Empty)
             .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-            .Select(NormalizeHousingDisplayValue)
+            .Select(NormalizeEstateDisplayValue)
             .Where(entry => entry.Length > 0);
     }
 
@@ -824,6 +824,11 @@ public sealed class XaCharacterSnapshotRepository
     private static string NormalizeHousingDisplayValue(string value)
     {
         return string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+    }
+
+    private static string NormalizeEstateDisplayValue(string value)
+    {
+        return HousingPlotSizeData.ApplySizeSuffix(NormalizeHousingDisplayValue(value));
     }
 
     private static string NormalizeHousingTextForComparison(string value)

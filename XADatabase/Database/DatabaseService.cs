@@ -369,6 +369,7 @@ public sealed class DatabaseService : IDisposable
         string updatedUtc)
     {
         var conn = GetConnection();
+        var normalizedFcEstate = HousingPlotSizeData.ApplySizeSuffix(fcEstate);
         var normalizedHousing = XaCharacterSnapshotRepository.NormalizeHousingPayload(personalEstate, sharedEstates, apartment);
         using var cmd = conn.CreateCommand();
         if (ActiveTransaction != null)
@@ -525,7 +526,7 @@ public sealed class DatabaseService : IDisposable
         cmd.Parameters.AddWithValue("@fc_name", fcName ?? string.Empty);
         cmd.Parameters.AddWithValue("@fc_tag", fcTag ?? string.Empty);
         cmd.Parameters.AddWithValue("@fc_points", fcPoints);
-        cmd.Parameters.AddWithValue("@fc_estate", fcEstate ?? string.Empty);
+        cmd.Parameters.AddWithValue("@fc_estate", normalizedFcEstate);
         cmd.Parameters.AddWithValue("@personal_estate", normalizedHousing.PersonalEstate);
         cmd.Parameters.AddWithValue("@shared_estates", normalizedHousing.SharedEstates);
         cmd.Parameters.AddWithValue("@apartment", normalizedHousing.Apartment);
