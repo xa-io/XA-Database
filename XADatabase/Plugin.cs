@@ -123,7 +123,8 @@ public sealed class Plugin : IDalamudPlugin
             getCharacterSummaryJson: () => MainWindow.GetCharacterSummaryJson(),
             getLastSnapshotResultJson: () => MainWindow.GetLastSnapshotResultJson(),
             searchItems: (query) => MainWindow.SearchItems(query),
-            getMatchingCharactersForItems: (itemKeysPayload) => MainWindow.GetMatchingCharactersForItems(itemKeysPayload)
+            getMatchingCharactersForItems: (itemKeysPayload) => MainWindow.GetMatchingCharactersForItems(itemKeysPayload),
+            searchCurrentCharacterItemsJson: (requestJson) => MainWindow.SearchCurrentCharacterItemsJson(requestJson)
         );
 
         WindowSystem.AddWindow(MainWindow);
@@ -244,5 +245,5 @@ public sealed class Plugin : IDalamudPlugin
 
 internal static class BuildInfo
 {
-    public const string Version = "0.0.0.33";
+    public const string Version = "0.0.0.34";
 }

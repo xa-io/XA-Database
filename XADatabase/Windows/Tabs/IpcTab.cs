@@ -87,6 +87,7 @@ public partial class MainWindow
             DrawIpcRow("XA.Database.GetLastSnapshotResultJson", "string", "Structured JSON payload describing the last save result");
             DrawIpcRow("XA.Database.SearchItems", "string", "Cross-character item search (takes query string, returns pipe-delimited results)");
             DrawIpcRow("XA.Database.GetMatchingCharactersForItems", "string", "Exact item-key match (takes comma/newline itemId:isHq keys, returns Character@World lines)");
+            DrawIpcRow("XA.Database.SearchCurrentCharacterItemsJson", "string", "Current-character scoped JSON item search for automation consumers");
 
             ImGui.EndTable();
         }
@@ -99,6 +100,7 @@ public partial class MainWindow
         ImGui.Spacing();
         ImGui.TextDisabled("var save = pluginInterface.GetIpcSubscriber<object>(\"XA.Database.Save\");");
         ImGui.TextDisabled("var isReady = pluginInterface.GetIpcSubscriber<bool>(\"XA.Database.IsReady\");");
+        ImGui.TextDisabled("var searchCurrent = pluginInterface.GetIpcSubscriber<string, string>(\"XA.Database.SearchCurrentCharacterItemsJson\");");
         ImGui.TextDisabled("if (isReady.InvokeFunc()) save.InvokeAction();");
 
         ImGui.Spacing();

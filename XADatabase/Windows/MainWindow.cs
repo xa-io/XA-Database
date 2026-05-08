@@ -26,6 +26,11 @@ public partial class MainWindow : Window, IDisposable
     private const string PluginVersion = BuildInfo.Version;
     private const int MaxTaskLogEntries = 50;
     private const double HoldToConfirmSeconds = 3.0;
+    private static readonly JsonSerializerOptions CurrentCharacterItemsJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
 
     // Cached collector results — refreshed on demand
     private List<CurrencyEntry> cachedCurrencies = new();
@@ -115,7 +120,7 @@ public partial class MainWindow : Window, IDisposable
 
     private static float UiScale => ImGuiHelpers.GlobalScale;
 
-    private static float UiScaleSafe => ImGuiHelpers.GlobalScaleSafe;
+    private static float UiScaleSafe => ImGuiHelpers.GlobalScale;
 
     private static float Scale(float value)
         => value * UiScale;
@@ -449,6 +454,201 @@ public partial class MainWindow : Window, IDisposable
             Plugin.Log.Error($"[XA] IPC GetMatchingCharactersForItems error: {ex}");
             return string.Empty;
         }
+    }
+
+    /// <summary>Current-character scoped item search for automation-safe IPC consumers.</summary>
+    public string SearchCurrentCharacterItemsJson(string requestJson)
+    {
+        var warnings = new List<string>();
+        var request = ParseCurrentCharacterItemsRequest(requestJson, warnings);
+        var requestItemIds = request.ItemIds ?? new List<uint>();
+        var requestSources = request.Sources ?? new List<string>();
+        var requestedItemIds = requestItemIds
+            .Where(itemId => itemId > 0)
+            .Distinct()
+            .ToHashSet();
+        var requestedSources = requestSources
+            .Where(source => !string.IsNullOrWhiteSpace(source))
+            .Select(source => source.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var includeRetainers = requestedSources.Count == 0
+            || requestedSources.Any(source =>
+                source.Equals("all", StringComparison.OrdinalIgnoreCase)
+                || source.Equals("retainer", StringComparison.OrdinalIgnoreCase)
+                || source.Equals("retainers", StringComparison.OrdinalIgnoreCase));
+
+        if (requestedItemIds.Count == 0)
+            warnings.Add("No itemIds were supplied; all supported current-character rows will be considered.");
+
+        var unsupportedSources = requestedSources
+            .Where(source =>
+                !source.Equals("all", StringComparison.OrdinalIgnoreCase)
+                && !source.Equals("retainer", StringComparison.OrdinalIgnoreCase)
+                && !source.Equals("retainers", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (unsupportedSources.Count > 0)
+            warnings.Add($"Unsupported sources ignored: {string.Join(", ", unsupportedSources)}.");
+
+        var ready = Plugin.PlayerState.IsLoaded && Plugin.PlayerState.ContentId != 0;
+        var contentId = ready ? Plugin.PlayerState.ContentId : 0UL;
+        var characterName = ready ? GetCharacterName() : string.Empty;
+        var world = ready ? ResolveCurrentHomeWorldName() : string.Empty;
+
+        if (!ready)
+        {
+            warnings.Add("XA Database is not ready or no current content ID is available.");
+            return SerializeCurrentCharacterItemsResponse(false, contentId, characterName, world, new List<CurrentCharacterItemIpcRow>(), warnings);
+        }
+
+        if (!includeRetainers)
+        {
+            warnings.Add("No supported sources were requested. Supported source: retainers.");
+            return SerializeCurrentCharacterItemsResponse(true, contentId, characterName, world, new List<CurrentCharacterItemIpcRow>(), warnings);
+        }
+
+        try
+        {
+            var snapshot = plugin.SnapshotRepo.GetSnapshot(contentId);
+            if (snapshot == null)
+            {
+                warnings.Add("No saved snapshot exists for the current character.");
+                return SerializeCurrentCharacterItemsResponse(true, contentId, characterName, world, new List<CurrentCharacterItemIpcRow>(), warnings);
+            }
+
+            if (!string.IsNullOrWhiteSpace(snapshot.Row.CharacterName))
+                characterName = snapshot.Row.CharacterName;
+            if (!string.IsNullOrWhiteSpace(snapshot.Row.World))
+                world = snapshot.Row.World;
+
+            var snapshotQuality = ResolveCurrentCharacterItemsSnapshotQuality(contentId, snapshot);
+            if (IsSnapshotUpdatedUtcStale(snapshot.Row.UpdatedUtc))
+                warnings.Add("Current-character snapshot is stale; retainer inventory may need a fresh save.");
+
+            var normalizedRetainers = XaCharacterSnapshotRepository.NormalizeRetainerPayload(
+                snapshot.Retainers,
+                snapshot.Listings,
+                snapshot.RetainerItems,
+                contentId);
+            if (normalizedRetainers.Retainers.Count == 0)
+                warnings.Add("No current-character retainers are present in the saved snapshot.");
+            if (normalizedRetainers.RetainerItems.Count == 0)
+                warnings.Add("No current-character retainer inventory rows are present in the saved snapshot.");
+
+            var retainerById = normalizedRetainers.Retainers.ToDictionary(retainer => retainer.RetainerId);
+            var rows = new List<CurrentCharacterItemIpcRow>();
+            foreach (var item in normalizedRetainers.RetainerItems)
+            {
+                if (requestedItemIds.Count > 0 && !requestedItemIds.Contains(item.ItemId))
+                    continue;
+                if (!request.IncludeZeroQuantity && item.Quantity <= 0)
+                    continue;
+                if (!retainerById.TryGetValue(item.RetainerId, out var retainer))
+                    continue;
+
+                rows.Add(new CurrentCharacterItemIpcRow
+                {
+                    Source = "retainer",
+                    OwnerContentId = retainer.OwnerContentId == 0 ? contentId : retainer.OwnerContentId,
+                    RetainerId = item.RetainerId,
+                    RetainerName = item.RetainerName,
+                    ContainerName = $"Retainer: {item.RetainerName}",
+                    ItemId = item.ItemId,
+                    ItemName = item.ItemName,
+                    Quantity = item.Quantity,
+                    IsHq = item.IsHq,
+                    LastSeenUtc = snapshot.Row.UpdatedUtc,
+                    SnapshotQuality = snapshotQuality,
+                });
+            }
+
+            return SerializeCurrentCharacterItemsResponse(true, contentId, characterName, world, rows, warnings);
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"[XA] IPC SearchCurrentCharacterItemsJson error: {ex}");
+            warnings.Add($"SearchCurrentCharacterItemsJson failed: {ex.Message}");
+            return SerializeCurrentCharacterItemsResponse(true, contentId, characterName, world, new List<CurrentCharacterItemIpcRow>(), warnings);
+        }
+    }
+
+    private static CurrentCharacterItemsIpcRequest ParseCurrentCharacterItemsRequest(string requestJson, List<string> warnings)
+    {
+        if (string.IsNullOrWhiteSpace(requestJson))
+            return new CurrentCharacterItemsIpcRequest();
+
+        try
+        {
+            var request = JsonSerializer.Deserialize<CurrentCharacterItemsIpcRequest>(requestJson, CurrentCharacterItemsJsonOptions)
+                ?? new CurrentCharacterItemsIpcRequest();
+            if (request.Version > IpcContractInfo.CurrentCharacterItemsJsonVersion)
+                warnings.Add($"Request version {request.Version} is newer than supported version {IpcContractInfo.CurrentCharacterItemsJsonVersion}; best-effort parsing was used.");
+            return request;
+        }
+        catch (JsonException)
+        {
+            warnings.Add("Request JSON was invalid; default request was used.");
+            return new CurrentCharacterItemsIpcRequest();
+        }
+    }
+
+    private static string SerializeCurrentCharacterItemsResponse(
+        bool ready,
+        ulong contentId,
+        string characterName,
+        string world,
+        List<CurrentCharacterItemIpcRow> rows,
+        List<string> warnings)
+    {
+        var response = new CurrentCharacterItemsIpcResponse
+        {
+            Version = IpcContractInfo.CurrentCharacterItemsJsonVersion,
+            IpcContractVersion = IpcContractInfo.CurrentVersion,
+            Ready = ready,
+            Character = new CurrentCharacterItemsIpcCharacter
+            {
+                ContentId = contentId,
+                Name = characterName,
+                World = world,
+            },
+            Rows = rows,
+            Warnings = warnings.Distinct(StringComparer.Ordinal).ToList(),
+        };
+
+        return JsonSerializer.Serialize(response, CurrentCharacterItemsJsonOptions);
+    }
+
+    private string ResolveCurrentCharacterItemsSnapshotQuality(ulong contentId, XaCharacterSnapshotData snapshot)
+    {
+        if (lastSnapshotResult != null && lastSnapshotResult.ContentId == contentId)
+            return string.IsNullOrWhiteSpace(lastSnapshotResult.Quality)
+                ? GetSnapshotQualityLabel(lastSnapshotResult)
+                : lastSnapshotResult.Quality;
+
+        if (IsSnapshotUpdatedUtcStale(snapshot.Row.UpdatedUtc))
+            return "Stale";
+
+        return string.IsNullOrWhiteSpace(snapshot.Row.UpdatedUtc) ? "No Snapshot" : "Persisted";
+    }
+
+    private static bool IsSnapshotUpdatedUtcStale(string updatedUtc)
+    {
+        if (!DateTime.TryParse(updatedUtc, out var parsed))
+            return false;
+
+        var parsedUtc = parsed.Kind == DateTimeKind.Unspecified
+            ? DateTime.SpecifyKind(parsed, DateTimeKind.Utc)
+            : parsed.ToUniversalTime();
+        return (DateTime.UtcNow - parsedUtc).TotalMinutes >= SnapshotStaleThresholdMinutes;
+    }
+
+    private static string ResolveCurrentHomeWorldName()
+    {
+        try { return Plugin.PlayerState.HomeWorld.Value.Name.ToString(); }
+        catch { }
+
+        try { return Plugin.ObjectTable.LocalPlayer?.HomeWorld.Value.Name.ToString() ?? string.Empty; }
+        catch { return string.Empty; }
     }
 
     private static bool SnapshotContainsAnyMatchingItem(XaCharacterSnapshotData snapshot, HashSet<string> itemKeys)
@@ -1818,3 +2018,43 @@ public sealed class CollectorValidationSummary
 }
 
 internal sealed record SearchItemRequest(uint ItemId, bool IsHq, string ItemName);
+
+internal sealed class CurrentCharacterItemsIpcRequest
+{
+    public int Version { get; set; } = IpcContractInfo.CurrentCharacterItemsJsonVersion;
+    public List<uint> ItemIds { get; set; } = new();
+    public List<string> Sources { get; set; } = new();
+    public bool IncludeZeroQuantity { get; set; }
+}
+
+internal sealed class CurrentCharacterItemsIpcResponse
+{
+    public int Version { get; set; }
+    public int IpcContractVersion { get; set; }
+    public bool Ready { get; set; }
+    public CurrentCharacterItemsIpcCharacter Character { get; set; } = new();
+    public List<CurrentCharacterItemIpcRow> Rows { get; set; } = new();
+    public List<string> Warnings { get; set; } = new();
+}
+
+internal sealed class CurrentCharacterItemsIpcCharacter
+{
+    public ulong ContentId { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string World { get; set; } = string.Empty;
+}
+
+internal sealed class CurrentCharacterItemIpcRow
+{
+    public string Source { get; set; } = string.Empty;
+    public ulong OwnerContentId { get; set; }
+    public ulong RetainerId { get; set; }
+    public string RetainerName { get; set; } = string.Empty;
+    public string ContainerName { get; set; } = string.Empty;
+    public uint ItemId { get; set; }
+    public string ItemName { get; set; } = string.Empty;
+    public int Quantity { get; set; }
+    public bool IsHq { get; set; }
+    public string LastSeenUtc { get; set; } = string.Empty;
+    public string SnapshotQuality { get; set; } = string.Empty;
+}
