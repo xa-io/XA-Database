@@ -753,23 +753,6 @@ public partial class MainWindow : Window, IDisposable
             if (freshMembers.Count > 0)
                 cachedFcMembers = freshMembers;
 
-            // Apply rank labels to FC members
-            // Priority: 1) Addon-read name→rank mapping, 2) Sort-based dict, 3) fallback labels
-            if (cachedFcMembers.Count > 0)
-            {
-                var addonRanks = FreeCompanyCollector.LastAddonMemberRanks;
-                var sortRanks = FreeCompanyCollector.LastCollectedRankNames;
-                foreach (var m in cachedFcMembers)
-                {
-                    // Try addon name→rank first (most reliable — read directly from member list UI)
-                    if (addonRanks.TryGetValue(m.Name, out var addonRank) && addonRank.Length > 0)
-                        m.RankName = addonRank;
-                    else if (sortRanks.TryGetValue(m.RankSort, out var rn) && rn.Length > 0)
-                        m.RankName = rn;
-                    else
-                        m.RankName = m.RankSort == 0 ? "Master" : $"Rank {m.RankSort + 1}";
-                }
-            }
             cachedCollections = CollectionCollector.Collect(Plugin.DataManager);
             cachedQuests = QuestCollector.CollectActiveQuests(Plugin.DataManager);
             cachedMsqMilestones = QuestCollector.CollectMsqProgress();
@@ -903,6 +886,7 @@ public partial class MainWindow : Window, IDisposable
                     RankName = member.RankName,
                 }).ToList();
             }
+            ApplyFcMemberRankNames(persistedSnapshot);
 
             // Load persisted squadron data from DB if not in barracks
             if (cachedSquadron == null && persistedSnapshot != null)
@@ -1125,6 +1109,7 @@ public partial class MainWindow : Window, IDisposable
                 cachedFc = persistedSnapshot.FreeCompany;
             if (cachedFc != null && cachedFcMembers.Count == 0 && persistedSnapshot != null && persistedSnapshot.FcMembers.Count > 0)
                 cachedFcMembers = persistedSnapshot.FcMembers;
+            ApplyFcMemberRankNames(persistedSnapshot);
             if (isOnHomeworld && cachedFc == null && hasReliableLiveCharacterContext)
                 ClearPersistedFreeCompanyState();
             ApplyFreeCompanyGilOwnership(contentId, name);

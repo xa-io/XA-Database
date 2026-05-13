@@ -468,6 +468,184 @@ public partial class MainWindow
         HousingCollector.ResetPersonalHousingState();
     }
 
+    private void ApplyFcMemberRankNames(XaCharacterSnapshotData? persistedSnapshot)
+    {
+        if (cachedFcMembers.Count == 0)
+            return;
+
+        var addonRanksByName = BuildRankNameByNameLookup(FreeCompanyCollector.LastAddonMemberRanks);
+        var persistedRanks = BuildPersistedFcMemberRankLookup(persistedSnapshot?.FcMembers);
+        var sortRanks = FreeCompanyCollector.LastCollectedRankNames;
+
+        foreach (var member in cachedFcMembers)
+        {
+            if (TryGetRankNameByName(member.Name, addonRanksByName, out var rankName)
+                || TryGetPersistedFcMemberRankName(member, persistedRanks.ByContentId, persistedRanks.ByNameWorld, persistedRanks.ByName, out rankName)
+                || TryGetRankNameBySort(member.RankSort, sortRanks, out rankName)
+                || TryKeepExistingSpecificFcRankName(member, out rankName))
+            {
+                member.RankName = rankName;
+                continue;
+            }
+
+            member.RankName = string.Empty;
+        }
+    }
+
+    private static string GetFcMemberRankDisplayName(FcMemberEntry member)
+    {
+        return IsUsableFcRankName(member.RankName)
+            ? member.RankName.Trim()
+            : GetFallbackFcMemberRankName(member.RankSort);
+    }
+
+    private static string GetFallbackFcMemberRankName(byte rankSort)
+    {
+        return rankSort == 0 ? "Master" : $"Rank {rankSort + 1}";
+    }
+
+    private static bool TryGetRankNameByName(string memberName, IReadOnlyDictionary<string, string> rankNamesByName, out string rankName)
+    {
+        rankName = string.Empty;
+        if (string.IsNullOrWhiteSpace(memberName))
+            return false;
+
+        if (!rankNamesByName.TryGetValue(memberName.Trim(), out var resolvedRankName) || !IsUsableFcRankName(resolvedRankName))
+            return false;
+
+        rankName = resolvedRankName.Trim();
+        return true;
+    }
+
+    private static bool TryGetRankNameBySort(byte rankSort, IReadOnlyDictionary<int, string> rankNamesBySort, out string rankName)
+    {
+        rankName = string.Empty;
+        if (!rankNamesBySort.TryGetValue(rankSort, out var resolvedRankName) || !IsUsableFcRankName(resolvedRankName))
+            return false;
+
+        rankName = resolvedRankName.Trim();
+        return true;
+    }
+
+    private static bool TryGetPersistedFcMemberRankName(
+        FcMemberEntry member,
+        IReadOnlyDictionary<ulong, string> rankNamesByContentId,
+        IReadOnlyDictionary<string, string> rankNamesByNameWorld,
+        IReadOnlyDictionary<string, string> rankNamesByName,
+        out string rankName)
+    {
+        rankName = string.Empty;
+
+        if (member.ContentId != 0
+            && rankNamesByContentId.TryGetValue(member.ContentId, out var contentIdRankName)
+            && IsUsableFcRankName(contentIdRankName))
+        {
+            rankName = contentIdRankName.Trim();
+            return true;
+        }
+
+        var nameWorldKey = BuildFcMemberNameWorldKey(member);
+        if (nameWorldKey.Length > 0
+            && rankNamesByNameWorld.TryGetValue(nameWorldKey, out var nameWorldRankName)
+            && IsUsableFcRankName(nameWorldRankName))
+        {
+            rankName = nameWorldRankName.Trim();
+            return true;
+        }
+
+        var nameKey = NormalizeFcMemberName(member.Name);
+        if (nameKey.Length > 0
+            && rankNamesByName.TryGetValue(nameKey, out var nameRankName)
+            && IsUsableFcRankName(nameRankName))
+        {
+            rankName = nameRankName.Trim();
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryKeepExistingSpecificFcRankName(FcMemberEntry member, out string rankName)
+    {
+        rankName = string.Empty;
+        if (!IsUsableFcRankName(member.RankName) || IsFallbackFcMemberRankName(member.RankName, member.RankSort))
+            return false;
+
+        rankName = member.RankName.Trim();
+        return true;
+    }
+
+    private static Dictionary<string, string> BuildRankNameByNameLookup(IReadOnlyDictionary<string, string> rankNamesByName)
+    {
+        var lookup = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, rankName) in rankNamesByName)
+        {
+            var nameKey = NormalizeFcMemberName(name);
+            if (nameKey.Length == 0 || !IsUsableFcRankName(rankName) || lookup.ContainsKey(nameKey))
+                continue;
+
+            lookup[nameKey] = rankName.Trim();
+        }
+
+        return lookup;
+    }
+
+    private static (Dictionary<ulong, string> ByContentId, Dictionary<string, string> ByNameWorld, Dictionary<string, string> ByName)
+        BuildPersistedFcMemberRankLookup(IEnumerable<FcMemberEntry>? persistedMembers)
+    {
+        var byContentId = new Dictionary<ulong, string>();
+        var byNameWorld = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var byName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var member in persistedMembers ?? Enumerable.Empty<FcMemberEntry>())
+        {
+            if (!IsUsableFcRankName(member.RankName))
+                continue;
+
+            var rankName = member.RankName.Trim();
+            if (member.ContentId != 0 && !byContentId.ContainsKey(member.ContentId))
+                byContentId[member.ContentId] = rankName;
+
+            var nameWorldKey = BuildFcMemberNameWorldKey(member);
+            if (nameWorldKey.Length > 0 && !byNameWorld.ContainsKey(nameWorldKey))
+                byNameWorld[nameWorldKey] = rankName;
+
+            var nameKey = NormalizeFcMemberName(member.Name);
+            if (nameKey.Length > 0 && !byName.ContainsKey(nameKey))
+                byName[nameKey] = rankName;
+        }
+
+        return (byContentId, byNameWorld, byName);
+    }
+
+    private static string BuildFcMemberNameWorldKey(FcMemberEntry member)
+    {
+        var name = NormalizeFcMemberName(member.Name);
+        if (name.Length == 0)
+            return string.Empty;
+
+        var world = member.HomeWorld != 0
+            ? member.HomeWorld.ToString()
+            : NormalizeFcMemberName(member.HomeWorldName);
+        return world.Length == 0 ? string.Empty : $"{name}@{world}";
+    }
+
+    private static string NormalizeFcMemberName(string value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+    }
+
+    private static bool IsUsableFcRankName(string rankName)
+    {
+        return !string.IsNullOrWhiteSpace(rankName);
+    }
+
+    private static bool IsFallbackFcMemberRankName(string rankName, byte rankSort)
+    {
+        return IsUsableFcRankName(rankName)
+            && rankName.Trim().Equals(GetFallbackFcMemberRankName(rankSort), StringComparison.OrdinalIgnoreCase);
+    }
+
     private List<ItemLocationResult> SearchSnapshotItemsByName(string searchText)
     {
         return SearchSnapshotItemsByName(searchText, 200);

@@ -266,7 +266,7 @@ public partial class MainWindow
                             ImGui.TextDisabled(m.Name);
 
                         ImGui.TableNextColumn();
-                        ImGui.TextDisabled(m.RankName.Length > 0 ? m.RankName : $"Rank {m.RankSort + 1}");
+                        ImGui.TextDisabled(GetFcMemberRankDisplayName(m));
 
                         ImGui.TableNextColumn();
                         if (isOnline && m.JobName.Length > 0)
