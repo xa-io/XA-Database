@@ -209,10 +209,18 @@ public partial class MainWindow : Window, IDisposable
         return $"{cachedFc.Name}|{cachedFc.Tag}|{cachedFc.FcPoints}|{cachedFc.Rank}";
     }
 
-    private List<CurrencyEntry> BuildCurrencyDisplayEntries()
+    private sealed class CurrencyDisplayEntry
+    {
+        public string Category { get; init; } = string.Empty;
+        public string Name { get; init; } = string.Empty;
+        public long Amount { get; init; }
+        public int Cap { get; init; }
+    }
+
+    private List<CurrencyDisplayEntry> BuildCurrencyDisplayEntries()
     {
         var displayCurrencies = cachedCurrencies
-            .Select(entry => new CurrencyEntry
+            .Select(entry => new CurrencyDisplayEntry
             {
                 Category = entry.Category,
                 Name = entry.Name,
@@ -221,24 +229,53 @@ public partial class MainWindow : Window, IDisposable
             })
             .ToList();
 
-        if (cachedFc == null)
+        int FindCommonCurrencyIndex(string name)
+        {
+            return displayCurrencies.FindIndex(entry =>
+                entry.Category.Equals("Common", StringComparison.OrdinalIgnoreCase)
+                && entry.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (cachedFc != null)
+        {
+            var fcChestEntry = new CurrencyDisplayEntry
+            {
+                Category = "Common",
+                Name = "FC Chest",
+                Amount = GetCurrentFcChestGil(),
+                Cap = 999_999_999,
+            };
+
+            var gilIndex = FindCommonCurrencyIndex("Gil");
+            if (gilIndex >= 0)
+                displayCurrencies.Insert(gilIndex + 1, fcChestEntry);
+            else
+                displayCurrencies.Add(fcChestEntry);
+        }
+
+        var retainerGil = GetRetainerGilValue();
+        if (cachedRetainers.Count == 0 && retainerGil <= 0)
             return displayCurrencies;
 
-        var fcChestEntry = new CurrencyEntry
+        var retainerGilEntry = new CurrencyDisplayEntry
         {
             Category = "Common",
-            Name = "FC Chest",
-            Amount = GetCurrentFcChestGil(),
+            Name = "Retainer Gil",
+            Amount = retainerGil,
             Cap = 999_999_999,
         };
 
-        var gilIndex = displayCurrencies.FindIndex(entry =>
-            entry.Category.Equals("Common", StringComparison.OrdinalIgnoreCase)
-            && entry.Name.Equals("Gil", StringComparison.OrdinalIgnoreCase));
-        if (gilIndex >= 0)
-            displayCurrencies.Insert(gilIndex + 1, fcChestEntry);
+        var fcChestIndex = FindCommonCurrencyIndex("FC Chest");
+        if (fcChestIndex >= 0)
+            displayCurrencies.Insert(fcChestIndex + 1, retainerGilEntry);
         else
-            displayCurrencies.Add(fcChestEntry);
+        {
+            var gilIndex = FindCommonCurrencyIndex("Gil");
+            if (gilIndex >= 0)
+                displayCurrencies.Insert(gilIndex + 1, retainerGilEntry);
+            else
+                displayCurrencies.Add(retainerGilEntry);
+        }
 
         return displayCurrencies;
     }

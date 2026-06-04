@@ -86,7 +86,7 @@ public partial class MainWindow
                     if (entry.Amount > 0)
                     {
                         // Gold color for gil, white for others
-                        if (entry.Name == "Gil" || entry.Name == "FC Chest")
+                        if (entry.Name == "Gil" || entry.Name == "FC Chest" || entry.Name == "Retainer Gil")
                             ImGui.TextColored(new Vector4(1.0f, 0.9f, 0.3f, 1.0f), $"{entry.Amount:N0}");
                         else
                             ImGui.Text($"{entry.Amount:N0}");

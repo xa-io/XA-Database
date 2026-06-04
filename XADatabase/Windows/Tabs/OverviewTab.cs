@@ -172,6 +172,19 @@ public partial class MainWindow
                     else
                         ImGui.TextDisabled("0");
                 }
+
+                var retainerGil = GetRetainerGilValue();
+                if (cachedRetainers.Count > 0 || retainerGil > 0)
+                {
+                    ImGui.TableNextRow();
+                    ImGui.TableNextColumn();
+                    ImGui.Text("Retainer Gil");
+                    ImGui.TableNextColumn();
+                    if (retainerGil > 0)
+                        ImGui.TextColored(new Vector4(1.0f, 0.9f, 0.3f, 1.0f), $"{retainerGil:N0}");
+                    else
+                        ImGui.TextDisabled("0");
+                }
             }
         }
 

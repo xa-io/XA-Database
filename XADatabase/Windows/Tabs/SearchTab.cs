@@ -62,6 +62,7 @@ public partial class MainWindow
                 .OrderBy(r => r.ItemName, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(r => r.Char, StringComparer.OrdinalIgnoreCase)
                 .ToList();
+            var totalQuantity = grouped.Sum(result => (long)result.Qty);
 
             ImGui.TextDisabled($"{grouped.Count} result(s)");
             ImGui.Spacing();
@@ -126,6 +127,19 @@ public partial class MainWindow
                     ImGui.TableNextColumn();
                     ImGui.TextDisabled(result.Char);
                 }
+
+                ImGui.TableNextRow();
+                ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0, ImGui.GetColorU32(new Vector4(0.15f, 0.15f, 0.25f, 1.0f)));
+                ImGui.TableNextColumn();
+                ImGui.TextColored(new Vector4(0.6f, 0.8f, 1.0f, 1.0f), "Total");
+                ImGui.TableNextColumn();
+                ImGui.TextColored(new Vector4(1.0f, 0.9f, 0.3f, 1.0f), $"x{totalQuantity:N0}");
+                ImGui.TableNextColumn();
+                ImGui.TextDisabled("-");
+                ImGui.TableNextColumn();
+                ImGui.TextDisabled("All matching results");
+                ImGui.TableNextColumn();
+                ImGui.TextDisabled("-");
             }
         }
         else if (activeExactItemSearch != null || itemSearchText.Length >= 2)
