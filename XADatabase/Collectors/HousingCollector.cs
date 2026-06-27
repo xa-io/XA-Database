@@ -120,7 +120,7 @@ public static class HousingCollector
     {
         try
         {
-            var hsb = AtkStage.Instance()->RaptureAtkUnitManager->GetAddonByName("HousingSignBoard");
+            var hsb = GetAddonByName("HousingSignBoard");
             if (hsb != null && hsb->IsVisible && hsb->IsReady)
                 CollectFromAddon((nint)hsb);
         }
@@ -393,19 +393,28 @@ public static class HousingCollector
 
     private static unsafe bool IsAddonVisible(string addonName)
     {
-        var addon = AtkStage.Instance()->RaptureAtkUnitManager->GetAddonByName(addonName);
+        var addon = GetAddonByName(addonName);
         return addon != null && addon->IsVisible;
     }
 
     private static unsafe bool TryReadOpenAddonTexts(string addonName, out List<(string Path, uint NodeId, string Text)> texts)
     {
         texts = new List<(string Path, uint NodeId, string Text)>();
-        var addon = AtkStage.Instance()->RaptureAtkUnitManager->GetAddonByName(addonName);
+        var addon = GetAddonByName(addonName);
         if (addon == null || !addon->IsVisible || !addon->IsReady)
             return false;
 
         texts = AddonTextReader.ReadAllText(addon);
         return texts.Count > 0;
+    }
+
+    private static unsafe AtkUnitBase* GetAddonByName(string addonName)
+    {
+        var stage = AtkStage.Instance();
+        if (stage == null || stage->RaptureAtkUnitManager == null)
+            return null;
+
+        return stage->RaptureAtkUnitManager->GetAddonByName(addonName);
     }
 
     private static bool ContainsText(List<(string Path, uint NodeId, string Text)> texts, string value, bool contains = false)

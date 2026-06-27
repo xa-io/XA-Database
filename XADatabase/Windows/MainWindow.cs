@@ -104,6 +104,7 @@ public partial class MainWindow : Window, IDisposable
         : base("XA Database##MainWindow", ImGuiWindowFlags.None)
     {
         this.plugin = plugin;
+        InhibitAtkCollision = true;
         UpdateSizeConstraints(UiScaleSafe);
         RefreshMigrationState();
     }

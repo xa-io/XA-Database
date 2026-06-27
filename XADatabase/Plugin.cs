@@ -134,11 +134,13 @@ public sealed class Plugin : IDalamudPlugin
 
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open the XA Database window"
+            HelpMessage = "Open the XA Database window",
+            AllowedInMacros = true,
         });
         CommandManager.AddHandler(CommandAlias, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open the XA Database window (alias)"
+            HelpMessage = "Open the XA Database window (alias)",
+            AllowedInMacros = true,
         });
 
         PluginInterface.UiBuilder.Draw += WindowSystem.Draw;
@@ -245,5 +247,5 @@ public sealed class Plugin : IDalamudPlugin
 
 internal static class BuildInfo
 {
-    public const string Version = "0.0.0.37";
+    public const string Version = "0.0.0.38";
 }

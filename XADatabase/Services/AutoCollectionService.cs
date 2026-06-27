@@ -306,7 +306,11 @@ public sealed class AutoCollectionService : IDisposable
     {
         try
         {
-            return AtkStage.Instance()->RaptureAtkUnitManager->GetAddonByName(name);
+            var stage = AtkStage.Instance();
+            if (stage == null || stage->RaptureAtkUnitManager == null)
+                return null;
+
+            return stage->RaptureAtkUnitManager->GetAddonByName(name);
         }
         catch
         {

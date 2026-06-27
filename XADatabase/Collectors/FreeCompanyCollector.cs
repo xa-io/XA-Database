@@ -171,14 +171,14 @@ public static class FreeCompanyCollector
     {
         try
         {
-            var fcAddon = AtkStage.Instance()->RaptureAtkUnitManager->GetAddonByName("FreeCompany");
+            var fcAddon = GetAddonByName("FreeCompany");
             if (fcAddon != null && fcAddon->IsVisible && fcAddon->IsReady)
             {
                 Plugin.Log.Debug("[XA] FreeCompany addon is open — reading FC points.");
                 CollectFromAddon((nint)fcAddon);
             }
 
-            var fcChestAddon = AtkStage.Instance()->RaptureAtkUnitManager->GetAddonByName("FreeCompanyChest");
+            var fcChestAddon = GetAddonByName("FreeCompanyChest");
             if (fcChestAddon != null && fcChestAddon->IsVisible && fcChestAddon->IsReady)
             {
                 Plugin.Log.Debug("[XA] FreeCompanyChest addon is open — reading FC chest gil.");
@@ -321,7 +321,7 @@ public static class FreeCompanyCollector
     {
         try
         {
-            var memberAddon = AtkStage.Instance()->RaptureAtkUnitManager->GetAddonByName("FreeCompanyMember");
+            var memberAddon = GetAddonByName("FreeCompanyMember");
             if (memberAddon == null || !memberAddon->IsVisible || !memberAddon->IsReady) return;
 
             var allText = AddonTextReader.ReadAllText(memberAddon);
@@ -421,6 +421,15 @@ public static class FreeCompanyCollector
         {
             Plugin.Log.Error($"[XA] CollectEstateFromAddon error: {ex.Message}");
         }
+    }
+
+    private static unsafe AtkUnitBase* GetAddonByName(string addonName)
+    {
+        var stage = AtkStage.Instance();
+        if (stage == null || stage->RaptureAtkUnitManager == null)
+            return null;
+
+        return stage->RaptureAtkUnitManager->GetAddonByName(addonName);
     }
 
     private static string SpanToString(Span<byte> span)

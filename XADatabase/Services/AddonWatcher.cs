@@ -18,6 +18,7 @@ public sealed class AddonWatcher : IDisposable
     private readonly IPluginLog log;
     private Action<AddonTriggerEvent>? onAddonClose;
     private Action<AddonTriggerEvent>? onAddonOpen;
+    private bool enabled;
 
     // Debug: track which addons are currently open
     private readonly HashSet<string> openAddons = new();
@@ -86,6 +87,12 @@ public sealed class AddonWatcher : IDisposable
         this.onAddonClose = onAddonClose;
         this.onAddonOpen = onAddonOpen;
 
+        if (enabled)
+        {
+            log.Debug("[XA] AddonWatcher already enabled; callbacks updated without duplicate listener registration.");
+            return;
+        }
+
         // Register persistent addons (debug tracking only)
         foreach (var (_, addons) in PersistentGroups)
             foreach (var addon in addons)
@@ -102,11 +109,15 @@ public sealed class AddonWatcher : IDisposable
                 addonLifecycle.RegisterListener(AddonEvent.PreFinalize, addon, OnTransientClose);
             }
 
+        enabled = true;
         log.Information("[XA] AddonWatcher enabled.");
     }
 
     public void Disable()
     {
+        if (!enabled)
+            return;
+
         foreach (var (_, addons) in PersistentGroups)
             foreach (var addon in addons)
             {
@@ -121,6 +132,7 @@ public sealed class AddonWatcher : IDisposable
                 addonLifecycle.UnregisterListener(AddonEvent.PreFinalize, addon, OnTransientClose);
             }
 
+        enabled = false;
         openAddons.Clear();
         log.Information("[XA] AddonWatcher disabled.");
     }

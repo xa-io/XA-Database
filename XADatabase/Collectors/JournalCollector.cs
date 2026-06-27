@@ -80,7 +80,11 @@ public static class JournalCollector
         if (stage == null)
             return;
 
-        var addon = stage->RaptureAtkUnitManager->GetAddonByName(JournalAddonName);
+        var unitManager = stage->RaptureAtkUnitManager;
+        if (unitManager == null)
+            return;
+
+        var addon = unitManager->GetAddonByName(JournalAddonName);
         if (addon == null || !addon->IsVisible || !addon->IsReady)
             return;
 

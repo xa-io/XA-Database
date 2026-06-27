@@ -23,7 +23,7 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
     private readonly IGameGui gameGui;
     private readonly IPluginLog log;
     private readonly object syncRoot = new();
-    private readonly Hook<GenerateItemTooltipDelegate>? generateItemTooltipHook;
+    private Hook<GenerateItemTooltipDelegate>? generateItemTooltipHook;
 
     private readonly Dictionary<ulong, CachedCharacterTooltipSnapshot> cachedSnapshotItems = new();
     private Dictionary<ItemTooltipKey, OwnedItemTooltipSummary> cachedSummaries = new();
@@ -66,7 +66,18 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
             return;
 
         disposed = true;
-        generateItemTooltipHook?.Dispose();
+        try
+        {
+            generateItemTooltipHook?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "[XA] Failed while disposing the item tooltip hook.");
+        }
+        finally
+        {
+            generateItemTooltipHook = null;
+        }
     }
 
     public void RefreshCache()
