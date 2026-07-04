@@ -84,6 +84,7 @@ public partial class MainWindow
             DrawIpcRow("XA.Database.GetPersonalPlotInfo", "string", "Personal Estate|Apartment (pipe-delimited)");
             DrawIpcRow("XA.Database.GetApartment", "string", "Apartment string only");
             DrawIpcRow("XA.Database.GetCharacterSummaryJson", "string", "Structured JSON summary for the current character snapshot");
+            DrawIpcRow("XA.Database.GetAccountCharacterListJson", "string", "Structured JSON roster merged from all saved character snapshots and legacy rows");
             DrawIpcRow("XA.Database.GetLastSnapshotResultJson", "string", "Structured JSON payload describing the last save result");
             DrawIpcRow("XA.Database.SearchItems", "string", "Cross-character item search (takes query string, returns pipe-delimited results)");
             DrawIpcRow("XA.Database.GetMatchingCharactersForItems", "string", "Exact item-key match (takes comma/newline itemId:isHq keys, returns Character@World lines)");

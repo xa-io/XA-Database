@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using Dalamud.Plugin.Services;
 using Lumina.Excel.Sheets;
 
@@ -58,6 +59,28 @@ public static class JobCollector
         ("Gatherer", 17), // BTN
         ("Gatherer", 18), // FSH
     };
+
+    /// <summary>
+    /// Maps normalized job abbreviations (e.g. "PLD") to ClassJob excel RowIds using the same
+    /// JobDefs table the collector iterates, so RowIds stay defined in exactly one place.
+    /// </summary>
+    public static Dictionary<string, uint> BuildAbbreviationRowIdMap(IDataManager dataManager)
+    {
+        var map = new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase);
+        var classJobSheet = dataManager.GetExcelSheet<ClassJob>();
+
+        foreach (var (_, rowId) in JobDefs)
+        {
+            if (!classJobSheet.TryGetRow(rowId, out var classJob))
+                continue;
+
+            var abbr = (classJob.Abbreviation.ToString() ?? string.Empty).Trim().ToUpperInvariant();
+            if (abbr.Length > 0)
+                map[abbr] = rowId;
+        }
+
+        return map;
+    }
 
     public static List<Models.JobEntry> Collect(IPlayerState playerState, IDataManager dataManager)
     {

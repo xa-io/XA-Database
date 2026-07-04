@@ -24,6 +24,7 @@ namespace XADatabase.Services;
 ///   XA.Database.SearchItems       (Func(string) → string) — Cross-character item search
 ///   XA.Database.GetMatchingCharactersForItems (Func(string) → string) — Exact item-key character matching
 ///   XA.Database.SearchCurrentCharacterItemsJson (Func(string) → string) — Current-character scoped item search JSON
+///   XA.Database.GetAccountCharacterListJson (Func → string) — Merged roster JSON of all saved character snapshots
 /// </summary>
 public sealed class IpcProvider : IDisposable
 {
@@ -48,6 +49,7 @@ public sealed class IpcProvider : IDisposable
     private readonly ICallGateProvider<string> getPersonalPlotInfoProvider;
     private readonly ICallGateProvider<string> getApartmentProvider;
     private readonly ICallGateProvider<string> getCharacterSummaryJsonProvider;
+    private readonly ICallGateProvider<string> getAccountCharacterListJsonProvider;
     private readonly ICallGateProvider<string> getLastSnapshotResultJsonProvider;
     private readonly ICallGateProvider<string, string> searchItemsProvider;
     private readonly ICallGateProvider<string, string> getMatchingCharactersForItemsProvider;
@@ -76,6 +78,7 @@ public sealed class IpcProvider : IDisposable
         getPersonalPlotInfoProvider = pluginInterface.GetIpcProvider<string>("XA.Database.GetPersonalPlotInfo");
         getApartmentProvider = pluginInterface.GetIpcProvider<string>("XA.Database.GetApartment");
         getCharacterSummaryJsonProvider = pluginInterface.GetIpcProvider<string>("XA.Database.GetCharacterSummaryJson");
+        getAccountCharacterListJsonProvider = pluginInterface.GetIpcProvider<string>("XA.Database.GetAccountCharacterListJson");
         getLastSnapshotResultJsonProvider = pluginInterface.GetIpcProvider<string>("XA.Database.GetLastSnapshotResultJson");
         searchItemsProvider = pluginInterface.GetIpcProvider<string, string>("XA.Database.SearchItems");
         getMatchingCharactersForItemsProvider = pluginInterface.GetIpcProvider<string, string>("XA.Database.GetMatchingCharactersForItems");
@@ -104,6 +107,7 @@ public sealed class IpcProvider : IDisposable
         Func<string> getPersonalPlotInfo,
         Func<string> getApartment,
         Func<string> getCharacterSummaryJson,
+        Func<string> getAccountCharacterListJson,
         Func<string> getLastSnapshotResultJson,
         Func<string, string> searchItems,
         Func<string, string> getMatchingCharactersForItems,
@@ -139,6 +143,7 @@ public sealed class IpcProvider : IDisposable
         getPersonalPlotInfoProvider.RegisterFunc(() => getPersonalPlotInfo());
         getApartmentProvider.RegisterFunc(() => getApartment());
         getCharacterSummaryJsonProvider.RegisterFunc(() => getCharacterSummaryJson());
+        getAccountCharacterListJsonProvider.RegisterFunc(() => getAccountCharacterListJson());
         getLastSnapshotResultJsonProvider.RegisterFunc(() => getLastSnapshotResultJson());
         searchItemsProvider.RegisterFunc((query) => searchItems(query));
         getMatchingCharactersForItemsProvider.RegisterFunc((itemKeysPayload) => getMatchingCharactersForItems(itemKeysPayload));
@@ -165,6 +170,7 @@ public sealed class IpcProvider : IDisposable
         getPersonalPlotInfoProvider.UnregisterFunc();
         getApartmentProvider.UnregisterFunc();
         getCharacterSummaryJsonProvider.UnregisterFunc();
+        getAccountCharacterListJsonProvider.UnregisterFunc();
         getLastSnapshotResultJsonProvider.UnregisterFunc();
         searchItemsProvider.UnregisterFunc();
         getMatchingCharactersForItemsProvider.UnregisterFunc();

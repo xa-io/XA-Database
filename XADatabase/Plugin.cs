@@ -121,6 +121,7 @@ public sealed class Plugin : IDalamudPlugin
             getPersonalPlotInfo: () => MainWindow.GetPersonalPlotInfo(),
             getApartment: () => MainWindow.GetApartment(),
             getCharacterSummaryJson: () => MainWindow.GetCharacterSummaryJson(),
+            getAccountCharacterListJson: () => MainWindow.GetAccountCharacterListJson(),
             getLastSnapshotResultJson: () => MainWindow.GetLastSnapshotResultJson(),
             searchItems: (query) => MainWindow.SearchItems(query),
             getMatchingCharactersForItems: (itemKeysPayload) => MainWindow.GetMatchingCharactersForItems(itemKeysPayload),
@@ -247,5 +248,5 @@ public sealed class Plugin : IDalamudPlugin
 
 internal static class BuildInfo
 {
-    public const string Version = "0.0.0.38";
+    public const string Version = "0.0.0.39";
 }

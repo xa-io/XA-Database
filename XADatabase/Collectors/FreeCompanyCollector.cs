@@ -130,13 +130,16 @@ public static class FreeCompanyCollector
     {
         if (LastFcPoints == 0 && fcPoints > 0)
             LastFcPoints = fcPoints;
+        // Once chest gil has been observed this session, LastFcGil == 0 can be an authoritative
+        // chest-read 0 — persisted seeding must not overwrite it with an older non-zero value.
+        var hadObservedFcChestGil = HasObservedFcChestGil;
         if (!HasObservedFcChestGil && (fcGil > 0 || fcGilObserved))
         {
             HasObservedFcChestGil = true;
             if (fcId != 0)
                 LastObservedFcGilFcId = fcId;
         }
-        if (LastFcGil == 0 && (fcGil > 0 || fcGilObserved))
+        if (!hadObservedFcChestGil && LastFcGil == 0 && (fcGil > 0 || fcGilObserved))
             LastFcGil = fcGil;
         if (string.IsNullOrEmpty(LastEstate) && !string.IsNullOrEmpty(estate))
             LastEstate = HousingPlotSizeData.ApplySizeSuffix(estate);

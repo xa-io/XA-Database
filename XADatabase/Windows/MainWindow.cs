@@ -31,6 +31,7 @@ public partial class MainWindow : Window, IDisposable
         PropertyNameCaseInsensitive = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
+    private Dictionary<string, uint>? classJobRowIdsByAbbreviation;
 
     // Cached collector results — refreshed on demand
     private List<CurrencyEntry> cachedCurrencies = new();
@@ -429,6 +430,177 @@ public partial class MainWindow : Window, IDisposable
             return string.Empty;
         }
     }
+
+    public string GetAccountCharacterListJson()
+    {
+        var warnings = new List<string>();
+        try
+        {
+            var snapshots = plugin.SnapshotRepo.GetAllSnapshots();
+            var legacyRows = plugin.CharacterRepo.GetAllLegacy();
+            var characters = BuildMergedAccountCharacterListRows(snapshots, legacyRows);
+
+            if (snapshots.Count == 0 && legacyRows.Count == 0)
+                warnings.Add("No local XA Database character rows exist on this client.");
+            else if (snapshots.Count == 0)
+                warnings.Add("No xa_characters snapshot rows exist; using legacy/basic character rows only.");
+
+            var legacyRowsWithoutJobs = characters.Count(static row =>
+                string.Equals(row.Source, "legacy", StringComparison.OrdinalIgnoreCase) && row.Jobs.Count == 0);
+            if (legacyRowsWithoutJobs > 0)
+                warnings.Add($"Legacy/basic character row(s) have no job detail: {legacyRowsWithoutJobs}.");
+
+            return SerializeAccountCharacterListResponse(true, snapshots.Count, legacyRows.Count, characters, warnings);
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"[XA] IPC GetAccountCharacterListJson error: {ex}");
+            warnings.Add($"GetAccountCharacterListJson failed: {ex.Message}");
+            return SerializeAccountCharacterListResponse(false, 0, 0, new List<AccountCharacterListIpcCharacter>(), warnings);
+        }
+    }
+
+    private static string SerializeAccountCharacterListResponse(
+        bool isFullRosterAvailable,
+        int xaSnapshotRows,
+        int legacyRows,
+        List<AccountCharacterListIpcCharacter> characters,
+        List<string> warnings)
+    {
+        var response = new AccountCharacterListIpcResponse
+        {
+            Version = IpcContractInfo.AccountCharacterListJsonVersion,
+            IpcContractVersion = IpcContractInfo.CurrentVersion,
+            GeneratedAtUtc = DateTime.UtcNow,
+            IsFullRosterAvailable = isFullRosterAvailable,
+            XaSnapshotRows = xaSnapshotRows,
+            LegacyRows = legacyRows,
+            MergedRows = characters.Count,
+            DataCenterCounts = BuildRosterCountMap(characters, static row => row.DataCenterName),
+            WorldCounts = BuildRosterCountMap(characters, static row => row.WorldName),
+            Characters = characters,
+            Warnings = warnings.Distinct(StringComparer.Ordinal).ToList(),
+        };
+
+        return JsonSerializer.Serialize(response, CurrentCharacterItemsJsonOptions);
+    }
+
+    private List<AccountCharacterListIpcCharacter> BuildMergedAccountCharacterListRows(
+        IReadOnlyList<XaCharacterSnapshotData> snapshots,
+        IReadOnlyList<CharacterRow> legacyRows)
+    {
+        var merged = new List<AccountCharacterListIpcCharacter>();
+        var seenContentIds = new HashSet<ulong>();
+        var seenCharacterKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var snapshot in snapshots)
+            TryAddAccountCharacterListRow(merged, seenContentIds, seenCharacterKeys, BuildAccountCharacterListRow(snapshot));
+
+        foreach (var legacyRow in legacyRows)
+            TryAddAccountCharacterListRow(merged, seenContentIds, seenCharacterKeys, BuildAccountCharacterListRow(legacyRow));
+
+        return merged
+            .OrderByDescending(static row => row.LastSnapshotUtc, StringComparer.Ordinal)
+            .ThenBy(static row => row.CharacterName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(static row => row.WorldName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static void TryAddAccountCharacterListRow(
+        List<AccountCharacterListIpcCharacter> rows,
+        HashSet<ulong> seenContentIds,
+        HashSet<string> seenCharacterKeys,
+        AccountCharacterListIpcCharacter row)
+    {
+        if (row.ContentId == 0 && string.IsNullOrWhiteSpace(row.CharacterKey))
+            return;
+
+        if (row.ContentId != 0 && seenContentIds.Contains(row.ContentId))
+            return;
+
+        if (!string.IsNullOrWhiteSpace(row.CharacterKey) && seenCharacterKeys.Contains(row.CharacterKey))
+            return;
+
+        if (row.ContentId != 0)
+            seenContentIds.Add(row.ContentId);
+        if (!string.IsNullOrWhiteSpace(row.CharacterKey))
+            seenCharacterKeys.Add(row.CharacterKey);
+
+        rows.Add(row);
+    }
+
+    private AccountCharacterListIpcCharacter BuildAccountCharacterListRow(XaCharacterSnapshotData snapshot)
+    {
+        var rowIdsByAbbreviation = GetClassJobRowIdsByAbbreviation();
+        var jobRows = snapshot.Jobs
+            .Where(static job => job.IsUnlocked || job.Level > 0)
+            .Select(job => new AccountCharacterListIpcJob
+            {
+                JobId = rowIdsByAbbreviation.TryGetValue(job.Abbreviation.Trim(), out var rowId) ? rowId : 0,
+                JobAbbrev = job.Abbreviation,
+                JobName = job.Name,
+                Category = job.Category,
+                Level = job.Level,
+                LevelCap = job.LevelCap,
+                IsUnlocked = job.IsUnlocked,
+            })
+            .OrderBy(static job => job.JobId == 0 ? uint.MaxValue : job.JobId)
+            .ThenBy(static job => job.JobAbbrev, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return new AccountCharacterListIpcCharacter
+        {
+            ContentId = snapshot.Row.ContentId,
+            CharacterKey = BuildRosterCharacterKey(snapshot.Row.CharacterName, snapshot.Row.World),
+            CharacterName = snapshot.Row.CharacterName,
+            WorldName = snapshot.Row.World,
+            DataCenterName = snapshot.Row.Datacenter,
+            LastSnapshotUtc = snapshot.Row.UpdatedUtc,
+            SnapshotVersion = snapshot.Row.SnapshotVersion,
+            SnapshotQuality = ResolveCurrentCharacterItemsSnapshotQuality(snapshot.Row.ContentId, snapshot),
+            Source = "xa_characters",
+            JobLevels = jobRows
+                .Where(static job => job.JobId != 0)
+                .GroupBy(static job => job.JobId)
+                .ToDictionary(static group => group.Key, static group => group.Max(job => job.Level)),
+            Jobs = jobRows,
+        };
+    }
+
+    private static AccountCharacterListIpcCharacter BuildAccountCharacterListRow(CharacterRow legacyRow)
+        => new()
+        {
+            ContentId = legacyRow.ContentId,
+            CharacterKey = BuildRosterCharacterKey(legacyRow.Name, legacyRow.World),
+            CharacterName = legacyRow.Name,
+            WorldName = legacyRow.World,
+            DataCenterName = XaCharacterSnapshotRepository.ResolveDatacenter(legacyRow.World, legacyRow.Datacenter),
+            LastSnapshotUtc = string.IsNullOrWhiteSpace(legacyRow.LastSeenUtc) ? legacyRow.CreatedUtc : legacyRow.LastSeenUtc,
+            SnapshotVersion = 0,
+            SnapshotQuality = "legacy-basic",
+            Source = "legacy",
+        };
+
+    private static Dictionary<string, int> BuildRosterCountMap(
+        IReadOnlyList<AccountCharacterListIpcCharacter> characters,
+        Func<AccountCharacterListIpcCharacter, string> selector)
+        => characters
+            .GroupBy(character => NormalizeRosterCountKey(selector(character)), StringComparer.OrdinalIgnoreCase)
+            .OrderBy(static group => group.Key, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(static group => group.Key, static group => group.Count(), StringComparer.OrdinalIgnoreCase);
+
+    private static string NormalizeRosterCountKey(string value)
+        => string.IsNullOrWhiteSpace(value) ? "Unknown" : value.Trim();
+
+    private static string BuildRosterCharacterKey(string characterName, string worldName)
+    {
+        var name = string.IsNullOrWhiteSpace(characterName) ? "Unknown" : characterName.Trim();
+        var world = string.IsNullOrWhiteSpace(worldName) ? "Unknown" : worldName.Trim();
+        return $"{name}@{world}";
+    }
+
+    private Dictionary<string, uint> GetClassJobRowIdsByAbbreviation()
+        => classJobRowIdsByAbbreviation ??= JobCollector.BuildAbbreviationRowIdMap(Plugin.DataManager);
 
     public string GetLastSnapshotResultJson()
     {
@@ -876,7 +1048,7 @@ public partial class MainWindow : Window, IDisposable
                     cachedFc.HomeWorldId = persistedFc.HomeWorldId;
                 if (cachedFc.FcPoints == 0 && persistedFc.FcPoints > 0)
                     cachedFc.FcPoints = persistedFc.FcPoints;
-                if (cachedFc.FcGil == 0 && persistedFc.FcGil > 0)
+                if (cachedFc.FcGil == 0 && !cachedFc.FcGilObserved && persistedFc.FcGil > 0)
                     cachedFc.FcGil = persistedFc.FcGil;
                 if (!cachedFc.FcGilObserved && (persistedFc.FcGilObserved || persistedFc.FcGil > 0))
                     cachedFc.FcGilObserved = true;
@@ -2080,4 +2252,45 @@ internal sealed class CurrentCharacterItemIpcRow
     public bool IsHq { get; set; }
     public string LastSeenUtc { get; set; } = string.Empty;
     public string SnapshotQuality { get; set; } = string.Empty;
+}
+
+internal sealed class AccountCharacterListIpcResponse
+{
+    public int Version { get; set; }
+    public int IpcContractVersion { get; set; }
+    public DateTime GeneratedAtUtc { get; set; } = DateTime.UtcNow;
+    public bool IsFullRosterAvailable { get; set; }
+    public int XaSnapshotRows { get; set; }
+    public int LegacyRows { get; set; }
+    public int MergedRows { get; set; }
+    public Dictionary<string, int> DataCenterCounts { get; set; } = new();
+    public Dictionary<string, int> WorldCounts { get; set; } = new();
+    public List<AccountCharacterListIpcCharacter> Characters { get; set; } = new();
+    public List<string> Warnings { get; set; } = new();
+}
+
+internal sealed class AccountCharacterListIpcCharacter
+{
+    public ulong ContentId { get; set; }
+    public string CharacterKey { get; set; } = string.Empty;
+    public string CharacterName { get; set; } = string.Empty;
+    public string WorldName { get; set; } = string.Empty;
+    public string DataCenterName { get; set; } = string.Empty;
+    public string LastSnapshotUtc { get; set; } = string.Empty;
+    public int SnapshotVersion { get; set; }
+    public string SnapshotQuality { get; set; } = string.Empty;
+    public string Source { get; set; } = string.Empty;
+    public Dictionary<uint, int> JobLevels { get; set; } = new();
+    public List<AccountCharacterListIpcJob> Jobs { get; set; } = new();
+}
+
+internal sealed class AccountCharacterListIpcJob
+{
+    public uint JobId { get; set; }
+    public string JobAbbrev { get; set; } = string.Empty;
+    public string JobName { get; set; } = string.Empty;
+    public string Category { get; set; } = string.Empty;
+    public int Level { get; set; }
+    public int LevelCap { get; set; }
+    public bool IsUnlocked { get; set; }
 }
