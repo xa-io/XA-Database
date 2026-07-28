@@ -24,12 +24,6 @@ A Dalamud plugin for FINAL FANTASY XIV that collects character data — inventor
 - **Database Health Checks** — Run built-in health, read/write, and integrity checks from Settings.
 - **Export** — Export current or saved character data to CSV or JSON, and open the actual `xa.db` folder directly from Settings.
 
-## Patch 7.55 Beta Compatibility
-
-- XA Database v0.0.0.40 keeps its existing API 15 package and version. The current game executable resolves the item-tooltip signature exactly once.
-- Item tooltip hook activation now has an explicit availability state in Settings. A failed hook is disposed and cleared, while Search-tab hover summaries remain available without the live game-tooltip hook.
-- Debug and Release warning-as-error builds pass against the Patch 7.55 dependency set. Live tooltip, collector, addon-listener, IPC, reload, and SQLite shutdown checks remain required before runtime acceptance.
-
 ## Commands
 
 | Command       | Description                   |
