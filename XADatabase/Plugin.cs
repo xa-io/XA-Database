@@ -58,6 +58,7 @@ public sealed class Plugin : IDalamudPlugin
     // Framework tick flags — heavy work moved out of Draw() to avoid HITCH warnings
     private bool needsInitialSeed = true;
     private DateTime lastAutoSave = DateTime.MinValue;
+    private bool disposed;
 
     public Plugin()
     {
@@ -164,32 +165,55 @@ public sealed class Plugin : IDalamudPlugin
 
     public void Dispose()
     {
-        IpcProvider.Dispose();
-        AddonWatcher.Dispose();
-        ItemLocationTooltip.Dispose();
-        ItemSearchContextMenu.Dispose();
+        if (disposed)
+            return;
 
-        Framework.Update -= OnFrameworkUpdate;
+        disposed = true;
 
-        ClientState.Login -= OnLogin;
-        ClientState.Logout -= OnLogout;
+        // Stop every public entry point before releasing hook, IPC, window, or database owners.
+        TryCleanup("Framework.Update -= OnFrameworkUpdate", () => Framework.Update -= OnFrameworkUpdate);
+        TryCleanup("ClientState.Login -= OnLogin", () => ClientState.Login -= OnLogin);
+        TryCleanup("ClientState.Logout -= OnLogout", () => ClientState.Logout -= OnLogout);
+        TryCleanup("UiBuilder.Draw -= WindowSystem.Draw", () => PluginInterface.UiBuilder.Draw -= WindowSystem.Draw);
+        TryCleanup("UiBuilder.OpenConfigUi -= ToggleConfigUi", () => PluginInterface.UiBuilder.OpenConfigUi -= ToggleConfigUi);
+        TryCleanup("UiBuilder.OpenMainUi -= ToggleMainUi", () => PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi);
+        TryCleanup($"CommandManager.RemoveHandler({CommandName})", () => CommandManager.RemoveHandler(CommandName));
+        TryCleanup($"CommandManager.RemoveHandler({CommandAlias})", () => CommandManager.RemoveHandler(CommandAlias));
+        TryCleanup("WindowSystem.RemoveAllWindows", WindowSystem.RemoveAllWindows);
 
-        PluginInterface.UiBuilder.Draw -= WindowSystem.Draw;
-        PluginInterface.UiBuilder.OpenConfigUi -= ToggleConfigUi;
-        PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi;
+        TryDispose("IpcProvider", IpcProvider);
+        TryDispose("AddonWatcher", AddonWatcher);
+        TryDispose("ItemLocationTooltip", ItemLocationTooltip);
+        TryDispose("ItemSearchContextMenu", ItemSearchContextMenu);
+        TryDispose("MainWindow", MainWindow);
+        TryDispose("DatabaseService", DatabaseService);
+    }
 
-        WindowSystem.RemoveAllWindows();
+    private void TryDispose(string label, IDisposable? disposable)
+    {
+        if (disposable == null)
+            return;
 
-        MainWindow.Dispose();
+        TryCleanup(label, disposable.Dispose);
+    }
 
-        DatabaseService.Dispose();
-
-        CommandManager.RemoveHandler(CommandName);
-        CommandManager.RemoveHandler(CommandAlias);
+    private void TryCleanup(string label, Action cleanup)
+    {
+        try
+        {
+            cleanup();
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, $"[XA] Dispose cleanup failed for {label}.");
+        }
     }
 
     private void OnFrameworkUpdate(IFramework framework)
     {
+        if (disposed)
+            return;
+
         if (!PlayerState.IsLoaded)
             return;
 
@@ -219,6 +243,9 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnLogin()
     {
+        if (disposed)
+            return;
+
         Log.Information("[XA] Character logged in — refreshing and saving data.");
         if (Configuration.OpenPluginOnLoad)
             MainWindow.IsOpen = true;
@@ -227,6 +254,9 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnLogout(int type, int code)
     {
+        if (disposed)
+            return;
+
         Log.Information("[XA] Character logged out — saving final snapshot.");
         var result = MainWindow.SaveToDatabase(SnapshotTrigger.Logout, "Client logout");
         if (result.Success)
@@ -239,14 +269,26 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnCommand(string command, string args)
     {
+        if (disposed)
+            return;
+
         MainWindow.Toggle();
     }
 
-    public void ToggleConfigUi() => MainWindow.Toggle();
-    public void ToggleMainUi() => MainWindow.Toggle();
+    public void ToggleConfigUi()
+    {
+        if (!disposed)
+            MainWindow.Toggle();
+    }
+
+    public void ToggleMainUi()
+    {
+        if (!disposed)
+            MainWindow.Toggle();
+    }
 }
 
 internal static class BuildInfo
 {
-    public const string Version = "0.0.0.39";
+    public const string Version = "0.0.0.40";
 }

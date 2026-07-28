@@ -81,6 +81,7 @@ public partial class MainWindow
             plugin.Configuration.Save();
         }
         ImGui.TextDisabled("Shows XA-owned item totals and recent character locations in live item tooltips, and reuses the same summary on Search tab hover.");
+        ImGui.TextDisabled(plugin.ItemLocationTooltip.HookStatus);
 
         var hoverCharacterLimit = plugin.Configuration.SearchHoverTooltipCharacterLimit;
         ImGui.BeginDisabled(!searchHoverTooltipEnabled);

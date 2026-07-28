@@ -30,6 +30,9 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
     private int cacheGeneration;
     private bool disposed;
 
+    public bool IsHookAvailable => generateItemTooltipHook?.IsEnabled == true;
+    public string HookStatus { get; private set; } = "Unavailable - item tooltip hook has not been resolved.";
+
     private delegate void* GenerateItemTooltipDelegate(
         AtkUnitBase* addon,
         NumberArrayData* numberArrayData,
@@ -53,10 +56,28 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
                 GenerateItemTooltipSignature,
                 GenerateItemTooltipDetour);
             generateItemTooltipHook.Enable();
+            if (!generateItemTooltipHook.IsEnabled)
+                throw new InvalidOperationException("The item tooltip hook did not enter the enabled state.");
+
+            HookStatus = "Available - live game item tooltips can show XA ownership summaries.";
         }
         catch (Exception ex)
         {
             log.Warning(ex, "[XA] Failed to enable the item tooltip hook.");
+            HookStatus = "Unavailable on this game/Dalamud build - Search tab hover summaries remain available.";
+
+            try
+            {
+                generateItemTooltipHook?.Dispose();
+            }
+            catch (Exception cleanupEx)
+            {
+                log.Warning(cleanupEx, "[XA] Failed while clearing the unavailable item tooltip hook.");
+            }
+            finally
+            {
+                generateItemTooltipHook = null;
+            }
         }
     }
 
@@ -77,6 +98,7 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
         finally
         {
             generateItemTooltipHook = null;
+            HookStatus = "Disposed";
         }
     }
 
