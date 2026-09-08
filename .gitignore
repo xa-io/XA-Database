@@ -40,6 +40,7 @@ TestResults/
 test/
 tests/
 *.Tests/
+*.Core/
 
 # Root-level images (not plugin assets)
 *.png
