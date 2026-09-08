@@ -43,7 +43,7 @@ public partial class MainWindow
         bool isOnHomeworld = true;
         string currentWorldName = string.Empty;
         string homeWorldName = string.Empty;
-        var localPlayer = Plugin.ObjectTable.LocalPlayer;
+        var localPlayer = plugin.Services.ObjectTable.LocalPlayer;
         if (localPlayer != null)
         {
             var currentWorldId = localPlayer.CurrentWorld.RowId;
@@ -199,8 +199,8 @@ public partial class MainWindow
         ImGui.Spacing();
         ImGui.Spacing();
         // Detect current player's content ID for self-online override
-        var selfContentId = (!viewingContentId.HasValue && Plugin.PlayerState.IsLoaded)
-            ? Plugin.PlayerState.ContentId : 0UL;
+        var selfContentId = (!viewingContentId.HasValue && plugin.Services.PlayerState.IsLoaded)
+            ? plugin.Services.PlayerState.ContentId : 0UL;
         var onlineCount = cachedFcMembers.Count(m => m.IsOnline || m.ContentId == selfContentId);
         ImGui.TextColored(new Vector4(0.4f, 0.8f, 1.0f, 1.0f),
             cachedFcMembers.Count > 0

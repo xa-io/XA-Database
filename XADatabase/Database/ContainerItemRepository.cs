@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Microsoft.Data.Sqlite;
 using XADatabase.Models;
@@ -17,7 +17,7 @@ public class ContainerItemRepository
     public void SaveSnapshot(ulong contentId, List<ContainerItemEntry> items)
     {
         var conn = db.GetConnection();
-        var now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
+        var now = SnapshotTime.Format(DateTime.UtcNow);
 
         var ownTransaction = !db.HasActiveTransaction;
         var transaction = ownTransaction ? conn.BeginTransaction() : null;
@@ -26,7 +26,7 @@ public class ContainerItemRepository
             // Clear old items for this character first (full snapshot replace)
             using var deleteCmd = conn.CreateCommand();
             deleteCmd.CommandText = "DELETE FROM container_items WHERE content_id = @cid";
-            deleteCmd.Parameters.AddWithValue("@cid", (long)contentId);
+            deleteCmd.Parameters.AddTypedValue("@cid", (long)contentId);
             deleteCmd.ExecuteNonQuery();
 
             foreach (var item in items)
@@ -35,15 +35,15 @@ public class ContainerItemRepository
                 cmd.CommandText = @"
                     INSERT INTO container_items (content_id, container_name, container_type, slot_index, item_id, item_name, quantity, is_hq, updated_utc)
                     VALUES (@cid, @cname, @ctype, @slot, @itemid, @iname, @qty, @hq, @now)";
-                cmd.Parameters.AddWithValue("@cid", (long)contentId);
-                cmd.Parameters.AddWithValue("@cname", item.ContainerName);
-                cmd.Parameters.AddWithValue("@ctype", item.ContainerType);
-                cmd.Parameters.AddWithValue("@slot", item.SlotIndex);
-                cmd.Parameters.AddWithValue("@itemid", (long)item.ItemId);
-                cmd.Parameters.AddWithValue("@iname", item.ItemName);
-                cmd.Parameters.AddWithValue("@qty", item.Quantity);
-                cmd.Parameters.AddWithValue("@hq", item.IsHq ? 1 : 0);
-                cmd.Parameters.AddWithValue("@now", now);
+                cmd.Parameters.AddTypedValue("@cid", (long)contentId);
+                cmd.Parameters.AddTypedValue("@cname", item.ContainerName);
+                cmd.Parameters.AddTypedValue("@ctype", item.ContainerType);
+                cmd.Parameters.AddTypedValue("@slot", item.SlotIndex);
+                cmd.Parameters.AddTypedValue("@itemid", (long)item.ItemId);
+                cmd.Parameters.AddTypedValue("@iname", item.ItemName);
+                cmd.Parameters.AddTypedValue("@qty", item.Quantity);
+                cmd.Parameters.AddTypedValue("@hq", item.IsHq ? 1 : 0);
+                cmd.Parameters.AddTypedValue("@now", now);
                 cmd.ExecuteNonQuery();
             }
 
@@ -66,7 +66,7 @@ public class ContainerItemRepository
             FROM container_items
             WHERE content_id = @cid
             ORDER BY container_name, slot_index";
-        cmd.Parameters.AddWithValue("@cid", (long)contentId);
+        cmd.Parameters.AddTypedValue("@cid", (long)contentId);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
@@ -98,7 +98,7 @@ public class ContainerItemRepository
             JOIN characters c ON c.content_id = ci.content_id
             WHERE ci.item_id = @itemid
             ORDER BY c.name, ci.container_name";
-        cmd.Parameters.AddWithValue("@itemid", (long)itemId);
+        cmd.Parameters.AddTypedValue("@itemid", (long)itemId);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
@@ -133,7 +133,7 @@ public class ContainerItemRepository
                 WHERE ci.item_name LIKE @search
                 ORDER BY ci.item_name, c.name, ci.container_name
                 LIMIT 200";
-            cmd.Parameters.AddWithValue("@search", $"%{searchText}%");
+            cmd.Parameters.AddTypedValue("@search", $"%{searchText}%");
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
@@ -161,7 +161,7 @@ public class ContainerItemRepository
                 WHERE ri.item_name LIKE @search
                 ORDER BY ri.item_name, c.name, r.name
                 LIMIT 200";
-            cmd.Parameters.AddWithValue("@search", $"%{searchText}%");
+            cmd.Parameters.AddTypedValue("@search", $"%{searchText}%");
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {

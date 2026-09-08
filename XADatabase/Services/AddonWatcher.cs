@@ -9,8 +9,8 @@ namespace XADatabase.Services;
 
 /// <summary>
 /// Watches game UI windows (addons) and triggers callbacks when they open/close.
-/// Persistent addons (inventory) are always loaded — tracked for display only.
-/// Transient addons trigger auto-save when they close.
+/// Visibility events capture persistent inventories as well as transient addons.
+/// The caller's autosave setting controls whether a close writes to disk.
 /// </summary>
 public sealed class AddonWatcher : IDisposable
 {
@@ -24,7 +24,7 @@ public sealed class AddonWatcher : IDisposable
     private readonly HashSet<string> openAddons = new();
 
     // Persistent addons: loaded once by the game, never finalized.
-    // Tracked for debug display only — do NOT trigger auto-save.
+    // Visibility closes, not destruction, trigger capture and optional auto-save.
     private static readonly (string Category, string[] Addons)[] PersistentGroups =
     {
         ("Inventory (always loaded)", new[] { "Inventory", "InventoryLarge", "InventoryExpansion" }),
@@ -36,7 +36,7 @@ public sealed class AddonWatcher : IDisposable
     {
         ("Inventory", new[] { "Character", "RecommendEquip", "GearSetList" }),
         ("Retainer", new[] { "RetainerList", "InventoryRetainer", "InventoryRetainerLarge", "RetainerSellList", "RetainerCharacter", "Bank" }),
-        ("Saddlebag", new[] { "InventoryBuddy" }),
+        ("Saddlebag", new[] { "InventoryBuddy", "InventoryBuddy2" }),
         ("Journal", new[] { "Journal" }),
         ("Market", new[] { "ItemSearch", "ItemSearchResult", "ItemHistory" }),
         ("NPC", new[] { "Repair", "Shop", "LetterList", "LetterViewer" }),
@@ -93,11 +93,13 @@ public sealed class AddonWatcher : IDisposable
             return;
         }
 
-        // Register persistent addons (debug tracking only)
+        // Persistent inventory visibility is independent of setup/finalization.
         foreach (var (_, addons) in PersistentGroups)
             foreach (var addon in addons)
             {
                 addonLifecycle.RegisterListener(AddonEvent.PostSetup, addon, OnAddonOpen);
+                addonLifecycle.RegisterListener(AddonEvent.PostOpen, addon, OnAddonOpen);
+                addonLifecycle.RegisterListener(AddonEvent.PreClose, addon, OnTransientClose);
                 addonLifecycle.RegisterListener(AddonEvent.PreFinalize, addon, OnPersistentClose);
             }
 
@@ -106,6 +108,8 @@ public sealed class AddonWatcher : IDisposable
             foreach (var addon in addons)
             {
                 addonLifecycle.RegisterListener(AddonEvent.PostSetup, addon, OnAddonOpen);
+                addonLifecycle.RegisterListener(AddonEvent.PostOpen, addon, OnAddonOpen);
+                addonLifecycle.RegisterListener(AddonEvent.PreClose, addon, OnTransientClose);
                 addonLifecycle.RegisterListener(AddonEvent.PreFinalize, addon, OnTransientClose);
             }
 
@@ -122,6 +126,8 @@ public sealed class AddonWatcher : IDisposable
             foreach (var addon in addons)
             {
                 addonLifecycle.UnregisterListener(AddonEvent.PostSetup, addon, OnAddonOpen);
+                addonLifecycle.UnregisterListener(AddonEvent.PostOpen, addon, OnAddonOpen);
+                addonLifecycle.UnregisterListener(AddonEvent.PreClose, addon, OnTransientClose);
                 addonLifecycle.UnregisterListener(AddonEvent.PreFinalize, addon, OnPersistentClose);
             }
 
@@ -129,6 +135,8 @@ public sealed class AddonWatcher : IDisposable
             foreach (var addon in addons)
             {
                 addonLifecycle.UnregisterListener(AddonEvent.PostSetup, addon, OnAddonOpen);
+                addonLifecycle.UnregisterListener(AddonEvent.PostOpen, addon, OnAddonOpen);
+                addonLifecycle.UnregisterListener(AddonEvent.PreClose, addon, OnTransientClose);
                 addonLifecycle.UnregisterListener(AddonEvent.PreFinalize, addon, OnTransientClose);
             }
 
@@ -143,8 +151,8 @@ public sealed class AddonWatcher : IDisposable
         openAddons.Add(name);
         log.Debug($"[XA] Addon opened: {name}");
 
-        // Fire open callback for transient addons (e.g. Workshop → collect voyage data while panel is open)
-        if (onAddonOpen != null && !PersistentAddonNames.Contains(name))
+        // Setup covers existing addon collectors; PostOpen covers persistent visibility changes.
+        if (onAddonOpen != null)
         {
             var category = AddonToCategory.GetValueOrDefault(name, "Unknown");
             var addonDetail = ResolveAddonDetail(name, args.Addon);
@@ -157,7 +165,7 @@ public sealed class AddonWatcher : IDisposable
                     AddonName = name,
                     AddonDetail = addonDetail,
                     AddonPtr = args.Addon,
-                    IsPersistent = false,
+                    IsPersistent = PersistentAddonNames.Contains(name),
                     TriggersSave = false,
                 });
             }
@@ -177,7 +185,9 @@ public sealed class AddonWatcher : IDisposable
     private void OnTransientClose(AddonEvent type, AddonArgs args)
     {
         var name = args.AddonName;
-        openAddons.Remove(name);
+        // PreClose captures populated buffers; PreFinalize is a fallback, not a second capture.
+        if (!openAddons.Remove(name))
+            return;
 
         var category = AddonToCategory.GetValueOrDefault(name, "Unknown");
         var addonDetail = ResolveAddonDetail(name, args.Addon);
@@ -192,7 +202,7 @@ public sealed class AddonWatcher : IDisposable
                 AddonName = name,
                 AddonDetail = addonDetail,
                 AddonPtr = args.Addon,
-                IsPersistent = false,
+                IsPersistent = PersistentAddonNames.Contains(name),
                 TriggersSave = true,
             });
         }
@@ -208,7 +218,7 @@ public sealed class AddonWatcher : IDisposable
     /// <summary>Whether the addon is a persistent (always-loaded) type.</summary>
     public static bool IsPersistent(string addonName) => PersistentAddonNames.Contains(addonName);
 
-    /// <summary>Persistent addon groups (display only, no save trigger).</summary>
+    /// <summary>Persistent addon groups (capture/save on visibility close).</summary>
     public static (string Category, string[] Addons)[] GetPersistentGroups() => PersistentGroups;
 
     /// <summary>Transient addon groups (trigger auto-save on close).</summary>

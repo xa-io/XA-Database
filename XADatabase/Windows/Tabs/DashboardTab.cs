@@ -39,7 +39,7 @@ public partial class MainWindow
         ImGui.Spacing();
 
         if (knownCharacters.Count == 0)
-            knownCharacters = plugin.CharacterRepo.GetAll();
+            knownCharacters = GetVisibleCharacters();
 
         if (knownCharacters.Count == 0)
         {

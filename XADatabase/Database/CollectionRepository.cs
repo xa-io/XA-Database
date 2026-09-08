@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using XADatabase.Models;
 
@@ -13,7 +13,7 @@ public class CollectionRepository
     public void SaveSnapshot(ulong contentId, List<CollectionSummary> collections)
     {
         var conn = db.GetConnection();
-        var now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
+        var now = SnapshotTime.Format(DateTime.UtcNow);
 
         foreach (var c in collections)
         {
@@ -25,11 +25,11 @@ public class CollectionRepository
                     unlocked = @unlocked,
                     total = @total,
                     updated_utc = @now";
-            cmd.Parameters.AddWithValue("@cid", (long)contentId);
-            cmd.Parameters.AddWithValue("@cat", c.Category);
-            cmd.Parameters.AddWithValue("@unlocked", c.Unlocked);
-            cmd.Parameters.AddWithValue("@total", c.Total);
-            cmd.Parameters.AddWithValue("@now", now);
+            cmd.Parameters.AddTypedValue("@cid", (long)contentId);
+            cmd.Parameters.AddTypedValue("@cat", c.Category);
+            cmd.Parameters.AddTypedValue("@unlocked", c.Unlocked);
+            cmd.Parameters.AddTypedValue("@total", c.Total);
+            cmd.Parameters.AddTypedValue("@now", now);
             cmd.ExecuteNonQuery();
         }
     }
@@ -42,7 +42,7 @@ public class CollectionRepository
         cmd.CommandText = @"
             SELECT category, unlocked, total
             FROM collection_summaries WHERE content_id = @cid ORDER BY category";
-        cmd.Parameters.AddWithValue("@cid", (long)contentId);
+        cmd.Parameters.AddTypedValue("@cid", (long)contentId);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
@@ -61,13 +61,13 @@ public class CollectionRepository
     public void SaveQuests(ulong contentId, List<ActiveQuestEntry> quests)
     {
         var conn = db.GetConnection();
-        var now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
+        var now = SnapshotTime.Format(DateTime.UtcNow);
 
         // Delete old quests for this character, then insert fresh
         using (var delCmd = conn.CreateCommand())
         {
             delCmd.CommandText = "DELETE FROM active_quests WHERE content_id = @cid";
-            delCmd.Parameters.AddWithValue("@cid", (long)contentId);
+            delCmd.Parameters.AddTypedValue("@cid", (long)contentId);
             delCmd.ExecuteNonQuery();
         }
 
@@ -77,11 +77,11 @@ public class CollectionRepository
             cmd.CommandText = @"
                 INSERT INTO active_quests (content_id, quest_id, name, sequence, updated_utc)
                 VALUES (@cid, @qid, @name, @seq, @now)";
-            cmd.Parameters.AddWithValue("@cid", (long)contentId);
-            cmd.Parameters.AddWithValue("@qid", (int)q.QuestId);
-            cmd.Parameters.AddWithValue("@name", q.Name);
-            cmd.Parameters.AddWithValue("@seq", (int)q.Sequence);
-            cmd.Parameters.AddWithValue("@now", now);
+            cmd.Parameters.AddTypedValue("@cid", (long)contentId);
+            cmd.Parameters.AddTypedValue("@qid", (int)q.QuestId);
+            cmd.Parameters.AddTypedValue("@name", q.Name);
+            cmd.Parameters.AddTypedValue("@seq", (int)q.Sequence);
+            cmd.Parameters.AddTypedValue("@now", now);
             cmd.ExecuteNonQuery();
         }
     }
@@ -94,7 +94,7 @@ public class CollectionRepository
         cmd.CommandText = @"
             SELECT quest_id, name, sequence
             FROM active_quests WHERE content_id = @cid ORDER BY name";
-        cmd.Parameters.AddWithValue("@cid", (long)contentId);
+        cmd.Parameters.AddTypedValue("@cid", (long)contentId);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
@@ -113,14 +113,14 @@ public class CollectionRepository
     public void SaveMsqMilestones(ulong contentId, List<MsqMilestoneEntry> milestones)
     {
         var conn = db.GetConnection();
-        var now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
+        var now = SnapshotTime.Format(DateTime.UtcNow);
 
         // Delete old milestones for this character, then insert fresh.
         // Prevents stale rows from previous milestone lists inflating the count.
         using (var delCmd = conn.CreateCommand())
         {
             delCmd.CommandText = "DELETE FROM msq_milestones WHERE content_id = @cid";
-            delCmd.Parameters.AddWithValue("@cid", (long)contentId);
+            delCmd.Parameters.AddTypedValue("@cid", (long)contentId);
             delCmd.ExecuteNonQuery();
         }
 
@@ -130,12 +130,12 @@ public class CollectionRepository
             cmd.CommandText = @"
                 INSERT INTO msq_milestones (content_id, quest_row_id, label, expansion, is_complete, updated_utc)
                 VALUES (@cid, @qrid, @label, @exp, @done, @now)";
-            cmd.Parameters.AddWithValue("@cid", (long)contentId);
-            cmd.Parameters.AddWithValue("@qrid", (long)m.QuestRowId);
-            cmd.Parameters.AddWithValue("@label", m.Label);
-            cmd.Parameters.AddWithValue("@exp", m.Expansion);
-            cmd.Parameters.AddWithValue("@done", m.IsComplete ? 1 : 0);
-            cmd.Parameters.AddWithValue("@now", now);
+            cmd.Parameters.AddTypedValue("@cid", (long)contentId);
+            cmd.Parameters.AddTypedValue("@qrid", (long)m.QuestRowId);
+            cmd.Parameters.AddTypedValue("@label", m.Label);
+            cmd.Parameters.AddTypedValue("@exp", m.Expansion);
+            cmd.Parameters.AddTypedValue("@done", m.IsComplete ? 1 : 0);
+            cmd.Parameters.AddTypedValue("@now", now);
             cmd.ExecuteNonQuery();
         }
     }
@@ -148,7 +148,7 @@ public class CollectionRepository
         cmd.CommandText = @"
             SELECT quest_row_id, label, expansion, is_complete
             FROM msq_milestones WHERE content_id = @cid ORDER BY quest_row_id";
-        cmd.Parameters.AddWithValue("@cid", (long)contentId);
+        cmd.Parameters.AddTypedValue("@cid", (long)contentId);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Microsoft.Data.Sqlite;
 using XADatabase.Models;
@@ -17,7 +17,7 @@ public class InventoryRepository
     public void SaveSnapshot(ulong contentId, List<InventorySummary> inventories)
     {
         var conn = db.GetConnection();
-        var now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
+        var now = SnapshotTime.Format(DateTime.UtcNow);
 
         var ownTransaction = !db.HasActiveTransaction;
         var transaction = ownTransaction ? conn.BeginTransaction() : null;
@@ -33,11 +33,11 @@ public class InventoryRepository
                         used_slots = @used,
                         total_slots = @total,
                         updated_utc = @now";
-                cmd.Parameters.AddWithValue("@cid", (long)contentId);
-                cmd.Parameters.AddWithValue("@name", inv.Name);
-                cmd.Parameters.AddWithValue("@used", inv.UsedSlots);
-                cmd.Parameters.AddWithValue("@total", inv.TotalSlots);
-                cmd.Parameters.AddWithValue("@now", now);
+                cmd.Parameters.AddTypedValue("@cid", (long)contentId);
+                cmd.Parameters.AddTypedValue("@name", inv.Name);
+                cmd.Parameters.AddTypedValue("@used", inv.UsedSlots);
+                cmd.Parameters.AddTypedValue("@total", inv.TotalSlots);
+                cmd.Parameters.AddTypedValue("@now", now);
                 cmd.ExecuteNonQuery();
             }
 
@@ -60,7 +60,7 @@ public class InventoryRepository
             FROM inventory_summaries
             WHERE content_id = @cid
             ORDER BY container_name";
-        cmd.Parameters.AddWithValue("@cid", (long)contentId);
+        cmd.Parameters.AddTypedValue("@cid", (long)contentId);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {

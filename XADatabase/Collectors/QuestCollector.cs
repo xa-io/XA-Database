@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using Lumina.Excel.Sheets;
+using XADatabase.Core.Collection;
 using XADatabase.Models;
+using XADatabase.Services;
 
 namespace XADatabase.Collectors;
 
@@ -80,7 +82,26 @@ public static class QuestCollector
         ("Dawntrail", "Trail to the Heavens", 71010),
     };
 
-    public static unsafe List<ActiveQuestEntry> CollectActiveQuests(IDataManager dataManager)
+    public static unsafe SectionResult<List<ActiveQuestEntry>> CollectActiveQuestsSection(XaServices services)
+    {
+        try
+        {
+            if (QuestManager.Instance() == null)
+                return SectionResult<List<ActiveQuestEntry>>.Unavailable([], "quest manager is not ready");
+
+            var value = CollectActiveQuests(services);
+            return value.Count == 0
+                ? SectionResult<List<ActiveQuestEntry>>.AuthoritativeEmpty(value)
+                : SectionResult<List<ActiveQuestEntry>>.Available(value);
+        }
+        catch (Exception ex)
+        {
+            services.Log.Error(ex, "[XA] Active quest collection failed.");
+            return SectionResult<List<ActiveQuestEntry>>.Failed([], ex.Message);
+        }
+    }
+
+    public static unsafe List<ActiveQuestEntry> CollectActiveQuests(XaServices services)
     {
         var results = new List<ActiveQuestEntry>();
 
@@ -90,7 +111,7 @@ public static class QuestCollector
             if (questManager == null)
                 return results;
 
-            var questSheet = dataManager.GetExcelSheet<Quest>();
+            var questSheet = services.DataManager.GetExcelSheet<Quest>();
 
             // Iterate normal quests (up to 30 active)
             for (int i = 0; i < questManager->NormalQuests.Length; i++)
@@ -124,7 +145,7 @@ public static class QuestCollector
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] Error collecting active quests: {ex.Message}");
+            services.Log.Error($"[XA] Error collecting active quests: {ex.Message}");
         }
 
         return results;
@@ -134,7 +155,26 @@ public static class QuestCollector
     /// Check completion status of all MSQ milestone quests.
     /// Uses QuestManager.IsQuestComplete with internal IDs (rowId - 65536).
     /// </summary>
-    public static unsafe List<MsqMilestoneEntry> CollectMsqProgress()
+    public static unsafe SectionResult<List<MsqMilestoneEntry>> CollectMsqProgressSection(XaServices services)
+    {
+        try
+        {
+            if (QuestManager.Instance() == null)
+                return SectionResult<List<MsqMilestoneEntry>>.Unavailable([], "quest manager is not ready");
+
+            var value = CollectMsqProgress(services);
+            return value.Count == 0
+                ? SectionResult<List<MsqMilestoneEntry>>.AuthoritativeEmpty(value)
+                : SectionResult<List<MsqMilestoneEntry>>.Available(value);
+        }
+        catch (Exception ex)
+        {
+            services.Log.Error(ex, "[XA] MSQ milestone collection failed.");
+            return SectionResult<List<MsqMilestoneEntry>>.Failed([], ex.Message);
+        }
+    }
+
+    public static unsafe List<MsqMilestoneEntry> CollectMsqProgress(XaServices services)
     {
         var results = new List<MsqMilestoneEntry>();
 
@@ -186,7 +226,7 @@ public static class QuestCollector
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] Error collecting MSQ progress: {ex.Message}");
+            services.Log.Error($"[XA] Error collecting MSQ progress: {ex.Message}");
         }
 
         return results;

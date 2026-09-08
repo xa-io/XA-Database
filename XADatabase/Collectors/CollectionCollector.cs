@@ -1,17 +1,38 @@
 ﻿using System;
 using System.Collections.Generic;
-using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game.UI;
 using Lumina.Excel.Sheets;
+using XADatabase.Core.Collection;
 using XADatabase.Models;
+using XADatabase.Services;
 using PlayerStateStruct = FFXIVClientStructs.FFXIV.Client.Game.UI.PlayerState;
 
 namespace XADatabase.Collectors;
 
 public static class CollectionCollector
 {
-    public static unsafe List<CollectionSummary> Collect(IDataManager dataManager)
+    public static unsafe SectionResult<List<CollectionSummary>> CollectSection(XaServices services)
     {
+        try
+        {
+            if (PlayerStateStruct.Instance() == null || UIState.Instance() == null)
+                return SectionResult<List<CollectionSummary>>.Unavailable([], "player collection managers are not ready");
+
+            var value = Collect(services);
+            return value.Count == 0
+                ? SectionResult<List<CollectionSummary>>.AuthoritativeEmpty(value)
+                : SectionResult<List<CollectionSummary>>.Available(value);
+        }
+        catch (Exception ex)
+        {
+            services.Log.Error(ex, "[XA] Collection collection failed.");
+            return SectionResult<List<CollectionSummary>>.Failed([], ex.Message);
+        }
+    }
+
+    public static unsafe List<CollectionSummary> Collect(XaServices services)
+    {
+        var dataManager = services.DataManager;
         var results = new List<CollectionSummary>();
         var ps = PlayerStateStruct.Instance();
         var uiState = UIState.Instance();
@@ -36,7 +57,7 @@ public static class CollectionCollector
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] Error collecting mounts: {ex.Message}");
+            services.Log.Error($"[XA] Error collecting mounts: {ex.Message}");
         }
 
         // ── Minions ──
@@ -59,7 +80,7 @@ public static class CollectionCollector
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] Error collecting minions: {ex.Message}");
+            services.Log.Error($"[XA] Error collecting minions: {ex.Message}");
         }
 
         // ── Orchestrion Rolls ──
@@ -83,7 +104,7 @@ public static class CollectionCollector
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] Error collecting orchestrion: {ex.Message}");
+            services.Log.Error($"[XA] Error collecting orchestrion: {ex.Message}");
         }
 
         // ── Triple Triad Cards ──
@@ -105,7 +126,7 @@ public static class CollectionCollector
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] Error collecting TT cards: {ex.Message}");
+            services.Log.Error($"[XA] Error collecting TT cards: {ex.Message}");
         }
 
         return results;

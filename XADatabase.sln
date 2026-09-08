@@ -5,6 +5,10 @@ VisualStudioVersion = 16.0.29709.97
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "XADatabase", "XADatabase\XADatabase.csproj", "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "XADatabase.Core", "XADatabase.Core\XADatabase.Core.csproj", "{6BA7BB73-EBAD-4E25-8D4E-4457DDA4E6E1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "XADatabase.Tests", "tests\XADatabase.Tests\XADatabase.Tests.csproj", "{3FA1F271-82A6-48CA-9486-9B87F7197C82}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -15,6 +19,14 @@ Global
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|x64.Build.0 = Debug|x64
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|x64.ActiveCfg = Release|x64
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|x64.Build.0 = Release|x64
+		{6BA7BB73-EBAD-4E25-8D4E-4457DDA4E6E1}.Debug|x64.ActiveCfg = Debug|x64
+		{6BA7BB73-EBAD-4E25-8D4E-4457DDA4E6E1}.Debug|x64.Build.0 = Debug|x64
+		{6BA7BB73-EBAD-4E25-8D4E-4457DDA4E6E1}.Release|x64.ActiveCfg = Release|x64
+		{6BA7BB73-EBAD-4E25-8D4E-4457DDA4E6E1}.Release|x64.Build.0 = Release|x64
+		{3FA1F271-82A6-48CA-9486-9B87F7197C82}.Debug|x64.ActiveCfg = Debug|x64
+		{3FA1F271-82A6-48CA-9486-9B87F7197C82}.Debug|x64.Build.0 = Debug|x64
+		{3FA1F271-82A6-48CA-9486-9B87F7197C82}.Release|x64.ActiveCfg = Release|x64
+		{3FA1F271-82A6-48CA-9486-9B87F7197C82}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

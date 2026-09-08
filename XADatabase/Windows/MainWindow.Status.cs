@@ -1,10 +1,11 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility.Raii;
+using XADatabase.Core.Quality;
+using XADatabase.Database;
 using XADatabase.Services;
 
 namespace XADatabase.Windows;
@@ -165,39 +166,28 @@ public partial class MainWindow
     private string GetSnapshotQualityLabel() => GetSnapshotQualityLabel(lastSnapshotResult);
 
     private string GetSnapshotQualityLabel(SaveSnapshotResult? result)
-    {
-        if (result == null)
-            return "No Snapshot";
-        if (result.Pending)
-            return "Saving";
-        if (!result.Success)
-            return "Degraded";
-        if (IsSnapshotStale(result))
-            return "Stale";
-        if (result.Warnings.Count > 0)
-            return "Partial";
-        return "Fresh";
-    }
+        => SnapshotQualityResolver.ToLabel(ResolveSnapshotQuality(result));
 
     private static Vector4 GetSnapshotQualityColor(SaveSnapshotResult? result)
     {
-        return result switch
+        return ResolveSnapshotQuality(result) switch
         {
-            null => new Vector4(0.7f, 0.7f, 0.7f, 1.0f),
-            _ when result.Pending => new Vector4(0.4f, 0.8f, 1.0f, 1.0f),
-            _ when !result.Success => new Vector4(1.0f, 0.45f, 0.45f, 1.0f),
-            _ when IsSnapshotStale(result) => new Vector4(1.0f, 0.75f, 0.3f, 1.0f),
-            _ when result.Warnings.Count > 0 => new Vector4(1.0f, 0.9f, 0.35f, 1.0f),
+            SnapshotQuality.None => new Vector4(0.7f, 0.7f, 0.7f, 1.0f),
+            SnapshotQuality.Saving => new Vector4(0.4f, 0.8f, 1.0f, 1.0f),
+            SnapshotQuality.Degraded => new Vector4(1.0f, 0.45f, 0.45f, 1.0f),
+            SnapshotQuality.Stale => new Vector4(1.0f, 0.75f, 0.3f, 1.0f),
+            SnapshotQuality.Partial => new Vector4(1.0f, 0.9f, 0.35f, 1.0f),
             _ => new Vector4(0.4f, 1.0f, 0.4f, 1.0f),
         };
     }
 
-    private static bool IsSnapshotStale(SaveSnapshotResult result)
-    {
-        if (!DateTime.TryParseExact(result.SavedAtUtc, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture,
-                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var savedAtUtc))
-            return false;
-
-        return (DateTime.UtcNow - savedAtUtc).TotalMinutes >= SnapshotStaleThresholdMinutes;
-    }
+    private static SnapshotQuality ResolveSnapshotQuality(SaveSnapshotResult? result)
+        => SnapshotQualityResolver.ClassifySave(
+            result != null,
+            result?.Pending ?? false,
+            result?.Success ?? false,
+            result?.Warnings.Count > 0,
+            result?.SavedAtUtc ?? string.Empty,
+            DateTime.UtcNow,
+            SnapshotStaleThresholdMinutes);
 }

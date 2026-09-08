@@ -4,6 +4,7 @@ using System.Linq;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using XADatabase.Data;
+using XADatabase.Core.Collection;
 using XADatabase.Database;
 using XADatabase.Services;
 
@@ -46,7 +47,35 @@ public static class HousingCollector
     /// Returns formatted strings for personal estate and apartment.
     /// Can be called from anywhere — does not require being in a housing zone.
     /// </summary>
-    public static unsafe (string PersonalEstate, string SharedEstates, string Apartment) CollectPersonalHousing()
+    public static SectionResult<(string PersonalEstate, string SharedEstates, string Apartment)> CollectSection(
+        XaServices services,
+        bool canProveAuthoritativeEmpty)
+    {
+        try
+        {
+            var value = CollectPersonalHousing(services);
+            var isEmpty = string.IsNullOrWhiteSpace(value.PersonalEstate)
+                && string.IsNullOrWhiteSpace(value.SharedEstates)
+                && string.IsNullOrWhiteSpace(value.Apartment);
+            if (isEmpty && !canProveAuthoritativeEmpty)
+            {
+                return SectionResult<(string, string, string)>.Unavailable(
+                    value,
+                    "housing identity is not authoritative in the current character context");
+            }
+
+            return isEmpty
+                ? SectionResult<(string, string, string)>.AuthoritativeEmpty(value)
+                : SectionResult<(string, string, string)>.Available(value);
+        }
+        catch (Exception ex)
+        {
+            services.Log.Error(ex, "[XA] Personal housing collection failed.");
+            return SectionResult<(string, string, string)>.Failed(default, ex.Message);
+        }
+    }
+
+    public static unsafe (string PersonalEstate, string SharedEstates, string Apartment) CollectPersonalHousing(XaServices services)
     {
         var personalEstate = string.Empty;
         var sharedEstates = string.Empty;
@@ -54,7 +83,7 @@ public static class HousingCollector
 
         try
         {
-            TryCollectFromOpenAddons();
+            TryCollectFromOpenAddons(services);
 
             // Personal Estate
             var personalHouseId = HousingManager.GetOwnedHouseId(EstateType.PersonalEstate);
@@ -65,11 +94,11 @@ public static class HousingCollector
                 var district = DistrictNames[personalHouseId.TerritoryTypeId];
 
                 personalEstate = HousingPlotSizeData.ApplySizeSuffix($"Plot {plot}, Ward {ward}, {district}");
-                Plugin.Log.Information($"[XA] Personal Estate: {personalEstate} (TerritoryType={personalHouseId.TerritoryTypeId}, World={personalHouseId.WorldId})");
+                services.Log.Information($"[XA] Personal Estate: {personalEstate} (TerritoryType={personalHouseId.TerritoryTypeId}, World={personalHouseId.WorldId})");
             }
             else
             {
-                Plugin.Log.Debug($"[XA] No personal estate (Id={personalHouseId.Id:X}, Territory={personalHouseId.TerritoryTypeId})");
+                services.Log.Debug($"[XA] No personal estate (Id={personalHouseId.Id:X}, Territory={personalHouseId.TerritoryTypeId})");
             }
 
             // Apartment
@@ -80,11 +109,11 @@ public static class HousingCollector
                 var room = aptHouseId.RoomNumber;
                 var district = DistrictNames[aptHouseId.TerritoryTypeId];
                 apartment = XaCharacterSnapshotRepository.NormalizeApartmentDisplayValue($"Room {room}, Ward {ward}, {district}");
-                Plugin.Log.Information($"[XA] Apartment: {apartment} (TerritoryType={aptHouseId.TerritoryTypeId}, World={aptHouseId.WorldId})");
+                services.Log.Information($"[XA] Apartment: {apartment} (TerritoryType={aptHouseId.TerritoryTypeId}, World={aptHouseId.WorldId})");
             }
             else
             {
-                Plugin.Log.Debug($"[XA] No apartment (Id={aptHouseId.Id:X}, Territory={aptHouseId.TerritoryTypeId})");
+                services.Log.Debug($"[XA] No apartment (Id={aptHouseId.Id:X}, Territory={aptHouseId.TerritoryTypeId})");
             }
 
             if (!string.IsNullOrEmpty(personalEstate) && !string.IsNullOrEmpty(LastPersonalEstateFromAddon))
@@ -99,7 +128,7 @@ public static class HousingCollector
 
                     personalEstate = promotedPersonalEstate;
                     RemoveSharedEstateFromAddon(sharedEstateAddress);
-                    Plugin.Log.Information($"[XA] Reclassified addon housing address as Personal Estate: \"{personalEstate}\"");
+                    services.Log.Information($"[XA] Reclassified addon housing address as Personal Estate: \"{personalEstate}\"");
                     break;
                 }
             }
@@ -110,23 +139,23 @@ public static class HousingCollector
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] Error collecting personal housing: {ex.Message}");
+            services.Log.Error($"[XA] Error collecting personal housing: {ex.Message}");
         }
 
         return (personalEstate, sharedEstates, apartment);
     }
 
-    public static unsafe void TryCollectFromOpenAddons()
+    public static unsafe void TryCollectFromOpenAddons(XaServices services)
     {
         try
         {
             var hsb = GetAddonByName("HousingSignBoard");
             if (hsb != null && hsb->IsVisible && hsb->IsReady)
-                CollectFromAddon((nint)hsb);
+                CollectFromAddon(services, (nint)hsb);
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] TryCollect HousingSignBoard error: {ex.Message}");
+            services.Log.Error($"[XA] TryCollect HousingSignBoard error: {ex.Message}");
         }
     }
 
@@ -154,13 +183,13 @@ public static class HousingCollector
         }
     }
 
-    public static unsafe void CollectFromAddon(nint addonPtr)
+    public static unsafe void CollectFromAddon(XaServices services, nint addonPtr)
     {
         try
         {
             if (addonPtr == nint.Zero)
             {
-                Plugin.Log.Debug("[XA] HousingSignBoard addon pointer is zero");
+                services.Log.Debug("[XA] HousingSignBoard addon pointer is zero");
                 return;
             }
 
@@ -191,11 +220,11 @@ public static class HousingCollector
 
             if (address.Length == 0)
             {
-                Plugin.Log.Debug("[XA] HousingSignBoard collector found no address text.");
+                services.Log.Debug("[XA] HousingSignBoard collector found no address text.");
                 return;
             }
 
-            var context = DetectHousingContext(title, ownerName, address);
+            var context = DetectHousingContext(services, title, ownerName, address);
             if (context != HousingSignBoardContext.Unknown)
                 LastObservedEstateContext = context;
 
@@ -203,43 +232,43 @@ public static class HousingCollector
             {
                 case HousingSignBoardContext.Apartment:
                     LastApartmentFromAddon = XaCharacterSnapshotRepository.NormalizeApartmentDisplayValue(address);
-                    Plugin.Log.Information($"[XA] Apartment from addon: \"{LastApartmentFromAddon}\"");
+                    services.Log.Information($"[XA] Apartment from addon: \"{LastApartmentFromAddon}\"");
                     break;
 
                 case HousingSignBoardContext.PersonalEstate:
                     LastPersonalEstateFromAddon = HousingPlotSizeData.ApplySizeSuffix(XaCharacterSnapshotRepository.StripHousingOwnerSuffix(address));
                     RemoveSharedEstateFromAddon(address);
-                    Plugin.Log.Information($"[XA] Personal estate from addon: \"{LastPersonalEstateFromAddon}\"");
+                    services.Log.Information($"[XA] Personal estate from addon: \"{LastPersonalEstateFromAddon}\"");
                     break;
 
                 case HousingSignBoardContext.FreeCompanyEstate:
-                    FreeCompanyCollector.CollectEstateFromAddon(addonPtr);
+                    FreeCompanyCollector.CollectEstateFromAddon(services, addonPtr);
                     break;
 
                 case HousingSignBoardContext.SharedEstate:
-                    var sharedEstateDisplayValue = BuildSharedEstateDisplayValue(address, ownerName);
+                    var sharedEstateDisplayValue = BuildSharedEstateDisplayValue(services, address, ownerName);
                     AddSharedEstateFromAddon(sharedEstateDisplayValue);
                     if (HousingDisplayValuesMatch(LastPersonalEstateFromAddon, sharedEstateDisplayValue))
                         LastPersonalEstateFromAddon = string.Empty;
-                    Plugin.Log.Information($"[XA] Shared estate from addon: \"{sharedEstateDisplayValue}\"");
+                    services.Log.Information($"[XA] Shared estate from addon: \"{sharedEstateDisplayValue}\"");
                     break;
 
                 default:
                     if (address.Contains("Room #", StringComparison.OrdinalIgnoreCase) || title.Contains("Apartment", StringComparison.OrdinalIgnoreCase))
                     {
                         LastApartmentFromAddon = XaCharacterSnapshotRepository.NormalizeApartmentDisplayValue(address);
-                        Plugin.Log.Information($"[XA] Apartment from addon (fallback): \"{LastApartmentFromAddon}\"");
+                        services.Log.Information($"[XA] Apartment from addon (fallback): \"{LastApartmentFromAddon}\"");
                     }
                     else if (IsFreeCompanyHousingContext())
                     {
-                        FreeCompanyCollector.CollectEstateFromAddon(addonPtr);
+                        FreeCompanyCollector.CollectEstateFromAddon(services, addonPtr);
                     }
                     break;
             }
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] CollectFromAddon housing error: {ex.Message}");
+            services.Log.Error($"[XA] CollectFromAddon housing error: {ex.Message}");
         }
     }
 
@@ -272,14 +301,14 @@ public static class HousingCollector
         LastSharedEstateAddressesFromAddon.RemoveAll(existing => HousingDisplayValuesMatch(existing, address));
     }
 
-    private static string BuildSharedEstateDisplayValue(string address, string ownerName)
+    private static string BuildSharedEstateDisplayValue(XaServices services, string address, string ownerName)
     {
         var baseAddress = HousingPlotSizeData.ApplySizeSuffix(XaCharacterSnapshotRepository.StripHousingOwnerSuffix(address));
         if (baseAddress.Length == 0)
             return string.Empty;
 
         var normalizedOwner = NormalizeHousingText(ownerName);
-        var currentPlayerName = NormalizeHousingText(Plugin.PlayerState.CharacterName.ToString());
+        var currentPlayerName = NormalizeHousingText(services.PlayerState.CharacterName.ToString());
         if (normalizedOwner.Length == 0 || normalizedOwner.Equals(currentPlayerName, StringComparison.OrdinalIgnoreCase))
             return baseAddress;
 
@@ -298,7 +327,7 @@ public static class HousingCollector
         return normalized.Length > 0 && !normalized.Equals(stripped, StringComparison.Ordinal);
     }
 
-    private static HousingSignBoardContext DetectHousingContext(string title, string ownerName, string address)
+    private static HousingSignBoardContext DetectHousingContext(XaServices services, string title, string ownerName, string address)
     {
         if (title.Contains("Apartment", StringComparison.OrdinalIgnoreCase)
             || address.Contains("Room #", StringComparison.OrdinalIgnoreCase)
@@ -320,7 +349,7 @@ public static class HousingCollector
         if (IsFreeCompanyHousingContext())
             return HousingSignBoardContext.FreeCompanyEstate;
 
-        var currentPlayerName = NormalizeHousingText(Plugin.PlayerState.CharacterName.ToString());
+        var currentPlayerName = NormalizeHousingText(services.PlayerState.CharacterName.ToString());
         if (ownerName.Length > 0 && currentPlayerName.Length > 0)
         {
             if (ownerName.Equals(currentPlayerName, StringComparison.OrdinalIgnoreCase))

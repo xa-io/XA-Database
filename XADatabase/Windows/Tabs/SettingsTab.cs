@@ -67,6 +67,16 @@ public partial class MainWindow
         }
         ImGui.TextDisabled("Appends the current version number to the main XA Database window title bar.");
 
+        var honorAutoRetainerExclusions = plugin.Configuration.HonorAutoRetainerExclusions;
+        if (ImGui.Checkbox("Honor AutoRetainer Exclusions", ref honorAutoRetainerExclusions))
+        {
+            plugin.Configuration.HonorAutoRetainerExclusions = honorAutoRetainerExclusions;
+            plugin.Configuration.Save();
+            plugin.CharacterVisibility.RequestRefresh();
+        }
+        ImGui.TextDisabled("Hides characters that are absent or excluded in AutoRetainer from cross-character views, totals, searches, IPC, and all-character exports. Saved XA data is not deleted.");
+        ImGui.TextDisabled(plugin.CharacterVisibility.StatusText);
+
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
@@ -195,7 +205,7 @@ public partial class MainWindow
             plugin.Configuration.AddonWatcherEnabled = addonEnabled;
             plugin.Configuration.Save();
         }
-        ImGui.TextDisabled("Passive save triggers only. XA Database tracks addon closes and saves current data when supported windows close.");
+        ImGui.TextDisabled("Save on supported window closes. Inventory changes always update memory; this setting controls close-triggered disk saves.");
 
         // Debug: show open addons
         ImGui.Spacing();
@@ -217,7 +227,7 @@ public partial class MainWindow
         if (persistentOpen.Count > 0)
         {
             ImGui.TextDisabled($"Always loaded ({persistentOpen.Count}): {string.Join(", ", persistentOpen)}");
-            ImGui.TextDisabled("(Inventory data is captured on every save — no close trigger needed.)");
+            ImGui.TextDisabled("(Inventory changes update memory; visibility closes can trigger a save when enabled.)");
         }
 
         ImGui.Spacing();
@@ -274,7 +284,7 @@ public partial class MainWindow
             catch (Exception ex)
             {
                 SetExportStatus($"Export error: {ex.Message}");
-                Plugin.Log.Error($"[XA] CSV export error: {ex}");
+                plugin.Services.Log.Error($"[XA] CSV export error: {ex}");
             }
         }
 
@@ -286,7 +296,7 @@ public partial class MainWindow
             {
                 var basePath = plugin.DatabaseService.GetDbDirectory();
                 var worldName = "Unknown";
-                try { worldName = Plugin.PlayerState.HomeWorld.Value.Name.ToString(); } catch { }
+                try { worldName = plugin.Services.PlayerState.HomeWorld.Value.Name.ToString(); } catch { }
                 var json = ExportService.ExportFullJson(
                     charLabel, worldName,
                     cachedCurrencies, cachedJobs, cachedInventory, cachedItems,
@@ -298,7 +308,7 @@ public partial class MainWindow
             catch (Exception ex)
             {
                 SetExportStatus($"Export error: {ex.Message}");
-                Plugin.Log.Error($"[XA] JSON export error: {ex}");
+                plugin.Services.Log.Error($"[XA] JSON export error: {ex}");
             }
         }
 
@@ -309,7 +319,7 @@ public partial class MainWindow
             try
             {
                 var basePath = plugin.DatabaseService.GetDbDirectory();
-                var chars = plugin.CharacterRepo.GetAll();
+                var chars = GetVisibleCharacters();
 
                 // Collect all character data for master CSVs
                 var allCurr = new List<(string Name, string World, List<CurrencyEntry> Data)>();
@@ -323,7 +333,7 @@ public partial class MainWindow
 
                 foreach (var ch in chars)
                 {
-                    var snapshot = plugin.SnapshotRepo.GetSnapshot(ch.ContentId);
+                    var snapshot = plugin.Snapshots.Get(ch.ContentId);
                     if (snapshot == null)
                         continue;
 
@@ -359,7 +369,7 @@ public partial class MainWindow
             catch (Exception ex)
             {
                 SetExportStatus($"Export error: {ex.Message}");
-                Plugin.Log.Error($"[XA] Export all CSV error: {ex}");
+                plugin.Services.Log.Error($"[XA] Export all CSV error: {ex}");
             }
         }
 

@@ -1,6 +1,7 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Microsoft.Data.Sqlite;
+using XADatabase.Core.Storage;
 using XADatabase.Models;
 
 namespace XADatabase.Database;
@@ -17,7 +18,7 @@ public class RetainerRepository
     public void SaveRetainers(ulong contentId, List<RetainerEntry> retainers)
     {
         var conn = db.GetConnection();
-        var now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
+        var now = SnapshotTime.Format(DateTime.UtcNow);
 
         var ownTransaction = !db.HasActiveTransaction;
         var transaction = ownTransaction ? conn.BeginTransaction() : null;
@@ -44,20 +45,20 @@ public class RetainerRepository
                         venture_status = @vstatus,
                         venture_eta = @veta,
                         updated_utc = @now";
-                cmd.Parameters.AddWithValue("@rid", (long)r.RetainerId);
-                cmd.Parameters.AddWithValue("@cid", (long)ownerContentId);
-                cmd.Parameters.AddWithValue("@name", r.Name);
-                cmd.Parameters.AddWithValue("@cj", (int)r.ClassJob);
-                cmd.Parameters.AddWithValue("@lvl", (int)r.Level);
-                cmd.Parameters.AddWithValue("@gil", (long)r.Gil);
-                cmd.Parameters.AddWithValue("@ic", (int)r.ItemCount);
-                cmd.Parameters.AddWithValue("@mic", (int)r.MarketItemCount);
-                cmd.Parameters.AddWithValue("@town", r.Town);
-                cmd.Parameters.AddWithValue("@vid", (int)r.VentureId);
-                cmd.Parameters.AddWithValue("@vcomplete", (long)r.VentureCompleteUnix);
-                cmd.Parameters.AddWithValue("@vstatus", r.VentureStatus);
-                cmd.Parameters.AddWithValue("@veta", r.VentureEta);
-                cmd.Parameters.AddWithValue("@now", now);
+                cmd.Parameters.AddTypedValue("@rid", r.RetainerId);
+                cmd.Parameters.AddTypedValue("@cid", ownerContentId);
+                cmd.Parameters.AddTypedValue("@name", r.Name);
+                cmd.Parameters.AddTypedValue("@cj", (int)r.ClassJob);
+                cmd.Parameters.AddTypedValue("@lvl", (int)r.Level);
+                cmd.Parameters.AddTypedValue("@gil", (long)r.Gil);
+                cmd.Parameters.AddTypedValue("@ic", (int)r.ItemCount);
+                cmd.Parameters.AddTypedValue("@mic", (int)r.MarketItemCount);
+                cmd.Parameters.AddTypedValue("@town", r.Town);
+                cmd.Parameters.AddTypedValue("@vid", (int)r.VentureId);
+                cmd.Parameters.AddTypedValue("@vcomplete", (long)r.VentureCompleteUnix);
+                cmd.Parameters.AddTypedValue("@vstatus", r.VentureStatus);
+                cmd.Parameters.AddTypedValue("@veta", r.VentureEta);
+                cmd.Parameters.AddTypedValue("@now", now);
                 cmd.ExecuteNonQuery();
             }
 
@@ -79,14 +80,14 @@ public class RetainerRepository
             SELECT retainer_id, name, class_job, level, gil, item_count, market_item_count, town,
                    venture_id, venture_complete_unix, venture_status, venture_eta
             FROM retainers WHERE content_id = @cid ORDER BY name";
-        cmd.Parameters.AddWithValue("@cid", (long)contentId);
+        cmd.Parameters.AddTypedValue("@cid", contentId);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
             results.Add(new RetainerEntry
             {
                 OwnerContentId = contentId,
-                RetainerId = (ulong)(long)reader["retainer_id"],
+                RetainerId = SqliteIdentity.Decode((long)reader["retainer_id"]),
                 Name = reader["name"].ToString() ?? "",
                 ClassJob = (byte)Convert.ToInt32(reader["class_job"]),
                 Level = (byte)Convert.ToInt32(reader["level"]),
@@ -106,7 +107,7 @@ public class RetainerRepository
     public void SaveListings(ulong retainerId, List<RetainerListingEntry> listings)
     {
         var conn = db.GetConnection();
-        var now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
+        var now = SnapshotTime.Format(DateTime.UtcNow);
 
         // Infer sales before replacing listings
         InferSales(retainerId, listings, now);
@@ -118,7 +119,7 @@ public class RetainerRepository
             // Clear old listings for this retainer
             using var deleteCmd = conn.CreateCommand();
             deleteCmd.CommandText = "DELETE FROM retainer_listings WHERE retainer_id = @rid";
-            deleteCmd.Parameters.AddWithValue("@rid", (long)retainerId);
+            deleteCmd.Parameters.AddTypedValue("@rid", retainerId);
             deleteCmd.ExecuteNonQuery();
 
             foreach (var l in listings)
@@ -127,14 +128,14 @@ public class RetainerRepository
                 cmd.CommandText = @"
                     INSERT INTO retainer_listings (retainer_id, slot_index, item_id, item_name, quantity, is_hq, unit_price, updated_utc)
                     VALUES (@rid, @slot, @itemid, @iname, @qty, @hq, @price, @now)";
-                cmd.Parameters.AddWithValue("@rid", (long)retainerId);
-                cmd.Parameters.AddWithValue("@slot", l.SlotIndex);
-                cmd.Parameters.AddWithValue("@itemid", (long)l.ItemId);
-                cmd.Parameters.AddWithValue("@iname", l.ItemName);
-                cmd.Parameters.AddWithValue("@qty", l.Quantity);
-                cmd.Parameters.AddWithValue("@hq", l.IsHq ? 1 : 0);
-                cmd.Parameters.AddWithValue("@price", (long)l.UnitPrice);
-                cmd.Parameters.AddWithValue("@now", now);
+                cmd.Parameters.AddTypedValue("@rid", retainerId);
+                cmd.Parameters.AddTypedValue("@slot", l.SlotIndex);
+                cmd.Parameters.AddTypedValue("@itemid", (long)l.ItemId);
+                cmd.Parameters.AddTypedValue("@iname", l.ItemName);
+                cmd.Parameters.AddTypedValue("@qty", l.Quantity);
+                cmd.Parameters.AddTypedValue("@hq", l.IsHq ? 1 : 0);
+                cmd.Parameters.AddTypedValue("@price", (long)l.UnitPrice);
+                cmd.Parameters.AddTypedValue("@now", now);
                 cmd.ExecuteNonQuery();
             }
 
@@ -196,14 +197,14 @@ public class RetainerRepository
                     cmd.CommandText = @"
                         INSERT INTO retainer_sales (retainer_id, item_id, item_name, quantity, is_hq, unit_price, total_gil, sold_utc)
                         VALUES (@rid, @itemid, @iname, @qty, @hq, @price, @total, @now)";
-                    cmd.Parameters.AddWithValue("@rid", (long)retainerId);
-                    cmd.Parameters.AddWithValue("@itemid", (long)itemId);
-                    cmd.Parameters.AddWithValue("@iname", oldVal.Name);
-                    cmd.Parameters.AddWithValue("@qty", soldQty);
-                    cmd.Parameters.AddWithValue("@hq", isHq ? 1 : 0);
-                    cmd.Parameters.AddWithValue("@price", (long)unitPrice);
-                    cmd.Parameters.AddWithValue("@total", totalGil);
-                    cmd.Parameters.AddWithValue("@now", now);
+                    cmd.Parameters.AddTypedValue("@rid", retainerId);
+                    cmd.Parameters.AddTypedValue("@itemid", (long)itemId);
+                    cmd.Parameters.AddTypedValue("@iname", oldVal.Name);
+                    cmd.Parameters.AddTypedValue("@qty", soldQty);
+                    cmd.Parameters.AddTypedValue("@hq", isHq ? 1 : 0);
+                    cmd.Parameters.AddTypedValue("@price", (long)unitPrice);
+                    cmd.Parameters.AddTypedValue("@total", totalGil);
+                    cmd.Parameters.AddTypedValue("@now", now);
                     cmd.ExecuteNonQuery();
 
                     Plugin.Log.Information($"[XA] Inferred sale: {soldQty}x {oldVal.Name} @ {unitPrice:N0} = {totalGil:N0} gil");
@@ -231,14 +232,14 @@ public class RetainerRepository
             WHERE r.content_id = @cid
             ORDER BY rs.sold_utc DESC
             LIMIT @limit";
-        cmd.Parameters.AddWithValue("@cid", (long)contentId);
-        cmd.Parameters.AddWithValue("@limit", limit);
+        cmd.Parameters.AddTypedValue("@cid", contentId);
+        cmd.Parameters.AddTypedValue("@limit", limit);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
             results.Add(new RetainerSaleEntry
             {
-                RetainerId = (ulong)(long)reader["retainer_id"],
+                RetainerId = SqliteIdentity.Decode((long)reader["retainer_id"]),
                 RetainerName = reader["retainer_name"].ToString() ?? "",
                 ItemId = (uint)Convert.ToInt64(reader["item_id"]),
                 ItemName = reader["item_name"].ToString() ?? "",
@@ -260,7 +261,7 @@ public class RetainerRepository
         cmd.CommandText = @"
             SELECT slot_index, item_id, item_name, quantity, is_hq, unit_price
             FROM retainer_listings WHERE retainer_id = @rid ORDER BY slot_index";
-        cmd.Parameters.AddWithValue("@rid", (long)retainerId);
+        cmd.Parameters.AddTypedValue("@rid", retainerId);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
@@ -292,13 +293,13 @@ public class RetainerRepository
             JOIN retainers r ON r.retainer_id = rl.retainer_id
             WHERE r.content_id = @cid
             ORDER BY r.name, rl.slot_index";
-        cmd.Parameters.AddWithValue("@cid", (long)contentId);
+        cmd.Parameters.AddTypedValue("@cid", contentId);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
             results.Add(new RetainerListingEntry
             {
-                RetainerId = (ulong)(long)reader["retainer_id"],
+                RetainerId = SqliteIdentity.Decode((long)reader["retainer_id"]),
                 RetainerName = reader["retainer_name"].ToString() ?? "",
                 SlotIndex = Convert.ToInt32(reader["slot_index"]),
                 ItemId = (uint)Convert.ToInt64(reader["item_id"]),
@@ -325,13 +326,13 @@ public class RetainerRepository
             JOIN retainers r ON r.retainer_id = ri.retainer_id
             WHERE r.content_id = @cid
             ORDER BY r.name, ri.item_name";
-        cmd.Parameters.AddWithValue("@cid", (long)contentId);
+        cmd.Parameters.AddTypedValue("@cid", contentId);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
             results.Add(new RetainerInventoryItem
             {
-                RetainerId = (ulong)(long)reader["retainer_id"],
+                RetainerId = SqliteIdentity.Decode((long)reader["retainer_id"]),
                 RetainerName = reader["retainer_name"].ToString() ?? "",
                 ItemId = (uint)Convert.ToInt64(reader["item_id"]),
                 ItemName = reader["item_name"].ToString() ?? "",
@@ -345,7 +346,7 @@ public class RetainerRepository
     public void SaveRetainerInventory(ulong retainerId, List<ContainerItemEntry> items)
     {
         var conn = db.GetConnection();
-        var now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
+        var now = SnapshotTime.Format(DateTime.UtcNow);
 
         var ownTransaction = !db.HasActiveTransaction;
         var transaction = ownTransaction ? conn.BeginTransaction() : null;
@@ -354,7 +355,7 @@ public class RetainerRepository
             // Clear old retainer inventory
             using var deleteCmd = conn.CreateCommand();
             deleteCmd.CommandText = "DELETE FROM retainer_items WHERE retainer_id = @rid";
-            deleteCmd.Parameters.AddWithValue("@rid", (long)retainerId);
+            deleteCmd.Parameters.AddTypedValue("@rid", retainerId);
             deleteCmd.ExecuteNonQuery();
 
             foreach (var item in items)
@@ -363,14 +364,14 @@ public class RetainerRepository
                 cmd.CommandText = @"
                     INSERT INTO retainer_items (retainer_id, container_type, slot_index, item_id, item_name, quantity, is_hq, updated_utc)
                     VALUES (@rid, @ctype, @slot, @itemid, @iname, @qty, @hq, @now)";
-                cmd.Parameters.AddWithValue("@rid", (long)retainerId);
-                cmd.Parameters.AddWithValue("@ctype", item.ContainerType);
-                cmd.Parameters.AddWithValue("@slot", item.SlotIndex);
-                cmd.Parameters.AddWithValue("@itemid", (long)item.ItemId);
-                cmd.Parameters.AddWithValue("@iname", item.ItemName);
-                cmd.Parameters.AddWithValue("@qty", item.Quantity);
-                cmd.Parameters.AddWithValue("@hq", item.IsHq ? 1 : 0);
-                cmd.Parameters.AddWithValue("@now", now);
+                cmd.Parameters.AddTypedValue("@rid", retainerId);
+                cmd.Parameters.AddTypedValue("@ctype", item.ContainerType);
+                cmd.Parameters.AddTypedValue("@slot", item.SlotIndex);
+                cmd.Parameters.AddTypedValue("@itemid", (long)item.ItemId);
+                cmd.Parameters.AddTypedValue("@iname", item.ItemName);
+                cmd.Parameters.AddTypedValue("@qty", item.Quantity);
+                cmd.Parameters.AddTypedValue("@hq", item.IsHq ? 1 : 0);
+                cmd.Parameters.AddTypedValue("@now", now);
                 cmd.ExecuteNonQuery();
             }
 

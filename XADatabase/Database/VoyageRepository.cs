@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using XADatabase.Models;
 
@@ -17,7 +17,7 @@ public class VoyageRepository
     public void Save(ulong fcId, VoyageInfo info)
     {
         var conn = db.GetConnection();
-        var now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
+        var now = SnapshotTime.Format(DateTime.UtcNow);
 
         var ownTransaction = !db.HasActiveTransaction;
         var transaction = ownTransaction ? conn.BeginTransaction() : null;
@@ -27,7 +27,7 @@ public class VoyageRepository
             using (var delCmd = conn.CreateCommand())
             {
                 delCmd.CommandText = "DELETE FROM voyages WHERE fc_id = @fcid";
-                delCmd.Parameters.AddWithValue("@fcid", (long)fcId);
+                delCmd.Parameters.AddTypedValue("@fcid", (long)fcId);
                 delCmd.ExecuteNonQuery();
             }
 
@@ -46,25 +46,25 @@ public class VoyageRepository
                     VALUES (@fcid, @type, @slot, @rank, @reg, @ret,
                         @cexp, @nexp, @hull, @stern, @bow, @bridge,
                         @surv, @retr, @spd, @rng, @fav, @build, @now)";
-                cmd.Parameters.AddWithValue("@fcid", (long)fcId);
-                cmd.Parameters.AddWithValue("@type", v.Type);
-                cmd.Parameters.AddWithValue("@slot", (int)v.Slot);
-                cmd.Parameters.AddWithValue("@rank", (int)v.RankId);
-                cmd.Parameters.AddWithValue("@reg", (long)v.RegisterTime);
-                cmd.Parameters.AddWithValue("@ret", (long)v.ReturnTime);
-                cmd.Parameters.AddWithValue("@cexp", (long)v.CurrentExp);
-                cmd.Parameters.AddWithValue("@nexp", (long)v.NextLevelExp);
-                cmd.Parameters.AddWithValue("@hull", (int)v.HullId);
-                cmd.Parameters.AddWithValue("@stern", (int)v.SternId);
-                cmd.Parameters.AddWithValue("@bow", (int)v.BowId);
-                cmd.Parameters.AddWithValue("@bridge", (int)v.BridgeId);
-                cmd.Parameters.AddWithValue("@surv", (int)v.Surveillance);
-                cmd.Parameters.AddWithValue("@retr", (int)v.Retrieval);
-                cmd.Parameters.AddWithValue("@spd", (int)v.Speed);
-                cmd.Parameters.AddWithValue("@rng", (int)v.Range);
-                cmd.Parameters.AddWithValue("@fav", (int)v.Favor);
-                cmd.Parameters.AddWithValue("@build", v.BuildString ?? "");
-                cmd.Parameters.AddWithValue("@now", now);
+                cmd.Parameters.AddTypedValue("@fcid", (long)fcId);
+                cmd.Parameters.AddTypedValue("@type", v.Type);
+                cmd.Parameters.AddTypedValue("@slot", (int)v.Slot);
+                cmd.Parameters.AddTypedValue("@rank", (int)v.RankId);
+                cmd.Parameters.AddTypedValue("@reg", (long)v.RegisterTime);
+                cmd.Parameters.AddTypedValue("@ret", (long)v.ReturnTime);
+                cmd.Parameters.AddTypedValue("@cexp", (long)v.CurrentExp);
+                cmd.Parameters.AddTypedValue("@nexp", (long)v.NextLevelExp);
+                cmd.Parameters.AddTypedValue("@hull", (int)v.HullId);
+                cmd.Parameters.AddTypedValue("@stern", (int)v.SternId);
+                cmd.Parameters.AddTypedValue("@bow", (int)v.BowId);
+                cmd.Parameters.AddTypedValue("@bridge", (int)v.BridgeId);
+                cmd.Parameters.AddTypedValue("@surv", (int)v.Surveillance);
+                cmd.Parameters.AddTypedValue("@retr", (int)v.Retrieval);
+                cmd.Parameters.AddTypedValue("@spd", (int)v.Speed);
+                cmd.Parameters.AddTypedValue("@rng", (int)v.Range);
+                cmd.Parameters.AddTypedValue("@fav", (int)v.Favor);
+                cmd.Parameters.AddTypedValue("@build", v.BuildString ?? "");
+                cmd.Parameters.AddTypedValue("@now", now);
                 cmd.ExecuteNonQuery();
             }
 
@@ -91,7 +91,7 @@ public class VoyageRepository
                    current_exp, next_level_exp, hull_id, stern_id, bow_id, bridge_id,
                    surveillance, retrieval, speed, range, favor, build_string
             FROM voyages WHERE fc_id = @fcid ORDER BY type, slot";
-        cmd.Parameters.AddWithValue("@fcid", (long)fcId);
+        cmd.Parameters.AddTypedValue("@fcid", (long)fcId);
 
         using var reader = cmd.ExecuteReader();
         while (reader.Read())

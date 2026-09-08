@@ -1,10 +1,15 @@
 ﻿using System;
 using Dalamud.Game.Command;
+using System.Collections.Generic;
+using Dalamud.Game.Inventory.InventoryEventArgTypes;
+using XADatabase.Collectors;
 using Dalamud.Game.Gui.ContextMenu;
 using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
+using XADatabase.Core.Policies;
+using XADatabase.Core.Security;
 using XADatabase.Database;
 using XADatabase.Services;
 using XADatabase.Windows;
@@ -21,6 +26,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IObjectTable ObjectTable { get; private set; } = null!;
     [PluginService] internal static IAddonLifecycle AddonLifecycle { get; private set; } = null!;
     [PluginService] internal static IGameGui GameGui { get; private set; } = null!;
+    [PluginService] internal static IGameInventory GameInventory { get; private set; } = null!;
     [PluginService] internal static ICondition Condition { get; private set; } = null!;
     [PluginService] internal static IFramework Framework { get; private set; } = null!;
     [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
@@ -32,6 +38,7 @@ public sealed class Plugin : IDalamudPlugin
     private const string CommandAlias = "/xadb";
 
     public Configuration Configuration { get; init; }
+    public XaServices Services { get; init; }
 
     public readonly WindowSystem WindowSystem = new("XA");
     private MainWindow MainWindow { get; init; }
@@ -40,6 +47,7 @@ public sealed class Plugin : IDalamudPlugin
     public DatabaseService DatabaseService { get; init; }
     public CharacterRepository CharacterRepo { get; init; }
     public XaCharacterSnapshotRepository SnapshotRepo { get; init; }
+    public SnapshotStore Snapshots { get; init; }
     public CurrencyRepository CurrencyRepo { get; init; }
     public JobRepository JobRepo { get; init; }
     public InventoryRepository InventoryRepo { get; init; }
@@ -51,24 +59,42 @@ public sealed class Plugin : IDalamudPlugin
     public VoyageRepository VoyageRepo { get; init; }
     public CollectionRepository CollectionRepo { get; init; }
     public AddonWatcher AddonWatcher { get; init; }
+    public AutoRetainerCharacterVisibilityService CharacterVisibility { get; init; }
     public IpcProvider IpcProvider { get; init; }
+    public IpcFacade IpcFacade { get; init; }
     public ItemLocationTooltipService ItemLocationTooltip { get; init; }
     public ItemSearchContextMenuService ItemSearchContextMenu { get; init; }
 
     // Framework tick flags — heavy work moved out of Draw() to avoid HITCH warnings
-    private bool needsInitialSeed = true;
-    private DateTime lastAutoSave = DateTime.MinValue;
+    private readonly PluginLifecycleSchedule lifecycleSchedule = new();
+    private int consecutiveFrameworkFailures;
     private bool disposed;
 
     public Plugin()
     {
+        Services = new XaServices(
+            PluginInterface,
+            ClientState,
+            PlayerState,
+            DataManager,
+            ObjectTable,
+            Condition,
+            Framework,
+            ChatGui,
+            Log,
+            GameGui);
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
-        var showVersionInWindowTitleDefaultChanged = false;
+        var configurationChanged = false;
         if (!Configuration.ShowVersionInWindowTitleDefaultApplied)
         {
             Configuration.ShowVersionInWindowTitle = true;
             Configuration.ShowVersionInWindowTitleDefaultApplied = true;
-            showVersionInWindowTitleDefaultChanged = true;
+            configurationChanged = true;
+        }
+        if (string.IsNullOrWhiteSpace(Configuration.FcMemberContentIdSalt))
+        {
+            Configuration.FcMemberContentIdSalt = LocalContentIdHash.CreateSalt();
+            configurationChanged = true;
         }
 
         // Initialize database
@@ -77,6 +103,7 @@ public sealed class Plugin : IDalamudPlugin
         DatabaseService.RunHealthCheck();
         CharacterRepo = new CharacterRepository(DatabaseService);
         SnapshotRepo = new XaCharacterSnapshotRepository(DatabaseService);
+        Snapshots = new SnapshotStore(SnapshotRepo);
         CurrencyRepo = new CurrencyRepository(DatabaseService);
         JobRepo = new JobRepository(DatabaseService);
         InventoryRepo = new InventoryRepository(DatabaseService);
@@ -88,14 +115,16 @@ public sealed class Plugin : IDalamudPlugin
         VoyageRepo = new VoyageRepository(DatabaseService);
         CollectionRepo = new CollectionRepository(DatabaseService);
         AddonWatcher = new AddonWatcher(AddonLifecycle, Log);
-        IpcProvider = new IpcProvider(PluginInterface, Log);
+        CharacterVisibility = new AutoRetainerCharacterVisibilityService(PluginInterface, Log);
+        IpcProvider = new IpcProvider(PluginInterface, Log, Framework);
 
-        if (showVersionInWindowTitleDefaultChanged)
+        if (configurationChanged)
             Configuration.Save();
 
         // Prune old currency history on startup
 
         MainWindow = new MainWindow(this);
+        IpcFacade = new IpcFacade(MainWindow, DatabaseService, Services.PlayerState, Services.ClientState);
         if (Configuration.OpenPluginOnLoad)
             MainWindow.IsOpen = true;
         ItemLocationTooltip = new ItemLocationTooltipService(this, GameInterop, GameGui, Log);
@@ -105,29 +134,7 @@ public sealed class Plugin : IDalamudPlugin
             (itemId, isHq) => MainWindow.OpenSearchForItem(itemId, isHq));
 
         // Wire IPC handlers now that MainWindow exists
-        IpcProvider.Initialize(
-            onSave: () => MainWindow.RefreshAndSave(SnapshotTrigger.XASlave, "IPC Save"),
-            onRefresh: () => MainWindow.RefreshData(),
-            isReady: () => PlayerState.IsLoaded,
-            getDbPath: () => DatabaseService.GetDbPath(),
-            version: BuildInfo.Version,
-            getCharacterName: () => MainWindow.GetCharacterName(),
-            getGil: () => MainWindow.GetGil(),
-            getRetainerGil: () => MainWindow.GetRetainerGil(),
-            getFcInfo: () => MainWindow.GetFcInfo(),
-            getFcName: () => MainWindow.GetFcName(),
-            getFcTag: () => MainWindow.GetFcTag(),
-            getFcPoints: () => MainWindow.GetFcPoints(),
-            getPlotInfo: () => MainWindow.GetPlotInfo(),
-            getPersonalPlotInfo: () => MainWindow.GetPersonalPlotInfo(),
-            getApartment: () => MainWindow.GetApartment(),
-            getCharacterSummaryJson: () => MainWindow.GetCharacterSummaryJson(),
-            getAccountCharacterListJson: () => MainWindow.GetAccountCharacterListJson(),
-            getLastSnapshotResultJson: () => MainWindow.GetLastSnapshotResultJson(),
-            searchItems: (query) => MainWindow.SearchItems(query),
-            getMatchingCharactersForItems: (itemKeysPayload) => MainWindow.GetMatchingCharactersForItems(itemKeysPayload),
-            searchCurrentCharacterItemsJson: (requestJson) => MainWindow.SearchCurrentCharacterItemsJson(requestJson)
-        );
+        IpcProvider.Initialize(IpcFacade);
 
         WindowSystem.AddWindow(MainWindow);
 
@@ -153,6 +160,8 @@ public sealed class Plugin : IDalamudPlugin
 
         ClientState.Login += OnLogin;
         ClientState.Logout += OnLogout;
+        ClientState.TerritoryChanged += OnTerritoryChanged;
+        GameInventory.InventoryChanged += OnInventoryChanged;
 
         // Enable addon watcher — single callback for all transient addon closes
         AddonWatcher.Enable(
@@ -174,6 +183,8 @@ public sealed class Plugin : IDalamudPlugin
         TryCleanup("Framework.Update -= OnFrameworkUpdate", () => Framework.Update -= OnFrameworkUpdate);
         TryCleanup("ClientState.Login -= OnLogin", () => ClientState.Login -= OnLogin);
         TryCleanup("ClientState.Logout -= OnLogout", () => ClientState.Logout -= OnLogout);
+        TryCleanup("ClientState.TerritoryChanged -= OnTerritoryChanged", () => ClientState.TerritoryChanged -= OnTerritoryChanged);
+        TryCleanup("GameInventory.InventoryChanged -= OnInventoryChanged", () => GameInventory.InventoryChanged -= OnInventoryChanged);
         TryCleanup("UiBuilder.Draw -= WindowSystem.Draw", () => PluginInterface.UiBuilder.Draw -= WindowSystem.Draw);
         TryCleanup("UiBuilder.OpenConfigUi -= ToggleConfigUi", () => PluginInterface.UiBuilder.OpenConfigUi -= ToggleConfigUi);
         TryCleanup("UiBuilder.OpenMainUi -= ToggleMainUi", () => PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi);
@@ -183,6 +194,7 @@ public sealed class Plugin : IDalamudPlugin
 
         TryDispose("IpcProvider", IpcProvider);
         TryDispose("AddonWatcher", AddonWatcher);
+        TryDispose("CharacterVisibility", CharacterVisibility);
         TryDispose("ItemLocationTooltip", ItemLocationTooltip);
         TryDispose("ItemSearchContextMenu", ItemSearchContextMenu);
         TryDispose("MainWindow", MainWindow);
@@ -214,30 +226,47 @@ public sealed class Plugin : IDalamudPlugin
         if (disposed)
             return;
 
-        if (!PlayerState.IsLoaded)
-            return;
-
-        // Initial seed + refresh — runs once after login/plugin load
-        if (needsInitialSeed)
+        try
         {
-            needsInitialSeed = false;
-            MainWindow.DoInitialSeed();
-            lastAutoSave = DateTime.UtcNow;
-        }
+            var nowUtc = DateTime.UtcNow;
+            if (CharacterVisibility.Update(Configuration.HonorAutoRetainerExclusions, nowUtc))
+                MainWindow.OnCharacterVisibilityChanged();
 
-        MainWindow.ProcessDeferredWork();
+            if (!ClientState.IsLoggedIn || !InventoryReadiness.CanCapture(Services))
+                return;
 
-        // Auto-save timer — moved from Draw() to avoid HITCH warnings
-        var autoInterval = Configuration.AutoSaveIntervalMinutes;
-        if (autoInterval > 0 && MainWindow.DataCollected)
-        {
-            var elapsed = DateTime.UtcNow - lastAutoSave;
-            if (elapsed.TotalMinutes >= autoInterval)
+            if (lifecycleSchedule.ShouldAttemptInitialSeed(nowUtc, TimeSpan.FromSeconds(5)))
+            {
+                lifecycleSchedule.MarkInitialSeedAttempted(nowUtc);
+                if (MainWindow.DoInitialSeed())
+                    lifecycleSchedule.MarkInitialSeedSucceeded(nowUtc);
+            }
+
+            MainWindow.ProcessDeferredWork();
+
+            var autoInterval = Configuration.AutoSaveIntervalMinutes;
+            if (lifecycleSchedule.ShouldQueueAutoSave(nowUtc, autoInterval, MainWindow.DataCollected))
             {
                 MainWindow.QueueRefreshAndSave(SnapshotTrigger.AutoSaveTimer, $"{autoInterval}m interval");
-                lastAutoSave = DateTime.UtcNow;
+                lifecycleSchedule.MarkAutoSaveQueued(nowUtc);
                 Log.Information($"[XA] Auto-save queued ({autoInterval}m interval).");
             }
+
+            if (lifecycleSchedule.ShouldRunPeriodicCheckpoint(nowUtc, TimeSpan.FromMinutes(30)))
+            {
+                lifecycleSchedule.MarkCheckpointAttempted(nowUtc);
+                LogCheckpointOutcome(DatabaseService.CheckpointWal("PASSIVE", "periodic timer"), "Periodic");
+            }
+
+            consecutiveFrameworkFailures = 0;
+        }
+        catch (Exception ex)
+        {
+            consecutiveFrameworkFailures++;
+            if (consecutiveFrameworkFailures <= 3)
+                Log.Error(ex, "[XA] Framework update failed.");
+            else if (consecutiveFrameworkFailures == 4)
+                Log.Error("[XA] Framework update has failed four consecutive times; further errors are suppressed until a framework update succeeds.");
         }
     }
 
@@ -249,7 +278,25 @@ public sealed class Plugin : IDalamudPlugin
         Log.Information("[XA] Character logged in — refreshing and saving data.");
         if (Configuration.OpenPluginOnLoad)
             MainWindow.IsOpen = true;
-        needsInitialSeed = true;
+        lifecycleSchedule.MarkLogin();
+        MainWindow.ClearPendingCaptureAndSave();
+    }
+
+    private void OnInventoryChanged(IReadOnlyCollection<InventoryEventArgs> events)
+    {
+        if (disposed || events.Count == 0 || !ClientState.IsLoggedIn)
+            return;
+
+        // Dalamud delivers a coalesced change batch on the framework thread.
+        // Update memory now, before automation can log out; do not force a disk save.
+        try { MainWindow.CaptureLiveInventory(); }
+        catch (Exception ex) { Log.Error(ex, "[XA] Inventory change capture failed; previous cache retained."); }
+    }
+
+    private void OnTerritoryChanged(uint territory)
+    {
+        if (!disposed)
+            MainWindow.QueueInventoryCapture();
     }
 
     private void OnLogout(int type, int code)
@@ -257,13 +304,31 @@ public sealed class Plugin : IDalamudPlugin
         if (disposed)
             return;
 
-        Log.Information("[XA] Character logged out — saving final snapshot.");
-        var result = MainWindow.SaveToDatabase(SnapshotTrigger.Logout, "Client logout");
+        var result = MainWindow.SaveForLogout("Client logout");
         if (result.Success)
+            Log.Information("[XA] Character logged out — final snapshot saved.");
+        else
+            Log.Warning($"[XA] Logout save did not run: {result.Summary}");
+
+        LogCheckpointOutcome(DatabaseService.CheckpointWal("FULL", "logout"), "Logout");
+    }
+
+    internal static void LogCheckpointOutcome(WalCheckpointOutcome outcome, string context)
+    {
+        switch (outcome)
         {
-            var checkpointed = DatabaseService.CheckpointWal("FULL", "logout save");
-            if (!checkpointed)
-                Log.Warning("[XA] Logout checkpoint did not fully merge the WAL into xa.db. External SQLite readers still see the latest data, but file-only copies may lag until the next checkpoint.");
+            case WalCheckpointOutcome.Merged:
+                return;
+            case WalCheckpointOutcome.Partial:
+            case WalCheckpointOutcome.Blocked:
+                Log.Warning($"[XA] {context} checkpoint did not fully merge the WAL into xa.db. Readers opening xa.db together with xa.db-wal still see committed data; a copy of xa.db alone may lag.");
+                return;
+            case WalCheckpointOutcome.SkippedTransactionActive:
+                Log.Error($"[XA] {context} checkpoint was skipped because a transaction was still active. The final snapshot may not be committed.");
+                return;
+            case WalCheckpointOutcome.Failed:
+                Log.Error($"[XA] {context} checkpoint failed. The state of xa.db could not be confirmed; run the database health check on next login.");
+                return;
         }
     }
 
@@ -286,9 +351,19 @@ public sealed class Plugin : IDalamudPlugin
         if (!disposed)
             MainWindow.Toggle();
     }
+
+    internal ulong ProtectOtherPlayerContentId(ulong contentId)
+    {
+        if (Services.PlayerState.IsLoaded && contentId == Services.PlayerState.ContentId)
+            return contentId;
+        return LocalContentIdHash.Hash(contentId, Configuration.FcMemberContentIdSalt);
+    }
+
+    internal bool IsCharacterVisible(ulong contentId)
+        => CharacterVisibility.IsVisible(contentId);
 }
 
 internal static class BuildInfo
 {
-    public const string Version = "0.0.0.40";
+    public const string Version = "0.0.0.41";
 }

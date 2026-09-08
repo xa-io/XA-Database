@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using XADatabase.Models;
 
@@ -16,7 +16,7 @@ public class SquadronRepository
     public void Save(ulong contentId, SquadronInfo info)
     {
         var conn = db.GetConnection();
-        var now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
+        var now = SnapshotTime.Format(DateTime.UtcNow);
 
         var ownTransaction = !db.HasActiveTransaction;
         var transaction = ownTransaction ? conn.BeginTransaction() : null;
@@ -33,15 +33,15 @@ public class SquadronRepository
                         progress = @prog, current_expedition = @exp, expedition_name = @expname,
                         bonus_physical = @phys, bonus_mental = @ment, bonus_tactical = @tact,
                         member_count = @mc, updated_utc = @now";
-                cmd.Parameters.AddWithValue("@cid", (long)contentId);
-                cmd.Parameters.AddWithValue("@prog", (int)info.Progress);
-                cmd.Parameters.AddWithValue("@exp", (int)info.CurrentExpedition);
-                cmd.Parameters.AddWithValue("@expname", info.ExpeditionName);
-                cmd.Parameters.AddWithValue("@phys", (int)info.BonusPhysical);
-                cmd.Parameters.AddWithValue("@ment", (int)info.BonusMental);
-                cmd.Parameters.AddWithValue("@tact", (int)info.BonusTactical);
-                cmd.Parameters.AddWithValue("@mc", (int)info.MemberCount);
-                cmd.Parameters.AddWithValue("@now", now);
+                cmd.Parameters.AddTypedValue("@cid", (long)contentId);
+                cmd.Parameters.AddTypedValue("@prog", (int)info.Progress);
+                cmd.Parameters.AddTypedValue("@exp", (int)info.CurrentExpedition);
+                cmd.Parameters.AddTypedValue("@expname", info.ExpeditionName);
+                cmd.Parameters.AddTypedValue("@phys", (int)info.BonusPhysical);
+                cmd.Parameters.AddTypedValue("@ment", (int)info.BonusMental);
+                cmd.Parameters.AddTypedValue("@tact", (int)info.BonusTactical);
+                cmd.Parameters.AddTypedValue("@mc", (int)info.MemberCount);
+                cmd.Parameters.AddTypedValue("@now", now);
                 cmd.ExecuteNonQuery();
             }
 
@@ -49,7 +49,7 @@ public class SquadronRepository
             using (var delCmd = conn.CreateCommand())
             {
                 delCmd.CommandText = "DELETE FROM squadron_members WHERE content_id = @cid";
-                delCmd.Parameters.AddWithValue("@cid", (long)contentId);
+                delCmd.Parameters.AddTypedValue("@cid", (long)contentId);
                 delCmd.ExecuteNonQuery();
             }
 
@@ -62,22 +62,22 @@ public class SquadronRepository
                         mastery_independent, mastery_offensive, mastery_defensive, mastery_balanced, updated_utc)
                     VALUES (@cid, @enpc, @name, @race, @sex, @cj, @cjname,
                         @lvl, @exp, @at, @it, @mi, @mo, @md, @mb, @now)";
-                cmd.Parameters.AddWithValue("@cid", (long)contentId);
-                cmd.Parameters.AddWithValue("@enpc", (long)m.ENpcResidentId);
-                cmd.Parameters.AddWithValue("@name", m.Name);
-                cmd.Parameters.AddWithValue("@race", (int)m.Race);
-                cmd.Parameters.AddWithValue("@sex", (int)m.Sex);
-                cmd.Parameters.AddWithValue("@cj", (int)m.ClassJob);
-                cmd.Parameters.AddWithValue("@cjname", m.ClassJobName);
-                cmd.Parameters.AddWithValue("@lvl", (int)m.Level);
-                cmd.Parameters.AddWithValue("@exp", (long)m.Experience);
-                cmd.Parameters.AddWithValue("@at", (int)m.ActiveTrait);
-                cmd.Parameters.AddWithValue("@it", (int)m.InactiveTrait);
-                cmd.Parameters.AddWithValue("@mi", (int)m.MasteryIndependent);
-                cmd.Parameters.AddWithValue("@mo", (int)m.MasteryOffensive);
-                cmd.Parameters.AddWithValue("@md", (int)m.MasteryDefensive);
-                cmd.Parameters.AddWithValue("@mb", (int)m.MasteryBalanced);
-                cmd.Parameters.AddWithValue("@now", now);
+                cmd.Parameters.AddTypedValue("@cid", (long)contentId);
+                cmd.Parameters.AddTypedValue("@enpc", (long)m.ENpcResidentId);
+                cmd.Parameters.AddTypedValue("@name", m.Name);
+                cmd.Parameters.AddTypedValue("@race", (int)m.Race);
+                cmd.Parameters.AddTypedValue("@sex", (int)m.Sex);
+                cmd.Parameters.AddTypedValue("@cj", (int)m.ClassJob);
+                cmd.Parameters.AddTypedValue("@cjname", m.ClassJobName);
+                cmd.Parameters.AddTypedValue("@lvl", (int)m.Level);
+                cmd.Parameters.AddTypedValue("@exp", (long)m.Experience);
+                cmd.Parameters.AddTypedValue("@at", (int)m.ActiveTrait);
+                cmd.Parameters.AddTypedValue("@it", (int)m.InactiveTrait);
+                cmd.Parameters.AddTypedValue("@mi", (int)m.MasteryIndependent);
+                cmd.Parameters.AddTypedValue("@mo", (int)m.MasteryOffensive);
+                cmd.Parameters.AddTypedValue("@md", (int)m.MasteryDefensive);
+                cmd.Parameters.AddTypedValue("@mb", (int)m.MasteryBalanced);
+                cmd.Parameters.AddTypedValue("@now", now);
                 cmd.ExecuteNonQuery();
             }
 
@@ -104,7 +104,7 @@ public class SquadronRepository
             cmd.CommandText = @"
                 SELECT progress, current_expedition, expedition_name, bonus_physical, bonus_mental, bonus_tactical, member_count
                 FROM squadron_info WHERE content_id = @cid LIMIT 1";
-            cmd.Parameters.AddWithValue("@cid", (long)contentId);
+            cmd.Parameters.AddTypedValue("@cid", (long)contentId);
             using var reader = cmd.ExecuteReader();
             if (reader.Read())
             {
@@ -131,7 +131,7 @@ public class SquadronRepository
                 SELECT enpc_id, name, race, sex, class_job, class_job_name, level, experience,
                        active_trait, inactive_trait, mastery_independent, mastery_offensive, mastery_defensive, mastery_balanced
                 FROM squadron_members WHERE content_id = @cid ORDER BY level DESC, name";
-            cmd.Parameters.AddWithValue("@cid", (long)contentId);
+            cmd.Parameters.AddTypedValue("@cid", (long)contentId);
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {

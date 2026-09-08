@@ -1,9 +1,9 @@
-﻿namespace XADatabase.Database;
+namespace XADatabase.Database;
 
 public static class Schema
 {
-    public const int CurrentVersion = 19;
-    public const int CurrentSnapshotVersion = 2;
+    public const int CurrentVersion = 21;
+    public const int CurrentSnapshotVersion = 3;
 
     public static readonly string[] CreateStatements =
     {
@@ -59,8 +59,5 @@ public static class Schema
             imported_from_legacy INTEGER NOT NULL DEFAULT 0,
             updated_utc TEXT NOT NULL DEFAULT ''
         )",
-
-        @"CREATE INDEX IF NOT EXISTS idx_xa_characters_updated_utc
-            ON xa_characters(updated_utc)",
     };
 }

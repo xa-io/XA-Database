@@ -9,7 +9,11 @@ A Dalamud plugin for FINAL FANTASY XIV that collects character data — inventor
 - **Plugin Operations** - Utility settings include `Open Plugin on Load` and a default-on `Show Version in Window Title` toggle that keeps the current XA Database version visible unless you turn it off.
 
 - **Offline Character Browser** — Browse saved characters anytime with name and world filters.
-- **Full Inventory Tracking** — Track equipped gear, armoury, saddlebags, crystals, and more.
+- **Full Inventory Tracking** — Track equipped gear, armoury, saddlebags, character crystals, and each retainer's shards, crystals, and clusters.
+- **Authoritative Refreshes** — Refresh readable inventory containers, including emptied bags, while retaining unavailable storage. Main inventory pages and saddlebag pairs are collected as coherent groups; other unavailable character sections keep their last-good data.
+- **Live Inventory Capture** — Inventory-change notifications keep the current character's in-memory cache up to date during automation, including while browsing a saved character. Normal and premium saddlebags are captured when readable; closed or unavailable storage remains last-observed data.
+- **Snapshot Integrity** — Browse saved characters without losing cached items, preserve the live character for logout saves, and distinguish save time from live-refresh time. Older, malformed, different-character, or lower-quality replacements are rejected; newer partial refreshes can save while preserving unavailable sections.
+- **Stable Local Identity** — Preserve character, retainer, and free-company IDs in the database, identify currencies independently of their display language, and protect other FC-member content IDs with stable hashes unique to the local installation.
 - **Cross-Character Search** — Search items across characters, retainers, and saddlebags, show owned location totals directly in live item tooltips, reuse the same recent-first ownership summary on Search tab hover, show a final matching-quantity total in Search results, and jump straight into an exact search from the XA `Search For Item` inventory right-click action.
 - **Scoped IPC Item Search** — Automation consumers can request current-character retainer item rows by item ID through structured JSON without receiving other-character search results.
 - **Currency Tracking** — Track gil, retainer gil, master-only FC chest gil, and expanded common, battle, other, and society currencies from live wallet and container data.
@@ -19,9 +23,12 @@ A Dalamud plugin for FINAL FANTASY XIV that collects character data — inventor
 - **Housing** — Track personal, shared, and apartment housing with cleaner normalization; non-apartment estate sizes are normalized from a verified hardcoded table for every residential district plot.
 - **Collections & Quests** — View mounts, minions, rolls, cards, active quests, and MSQ progress.
 - **Dashboard** — Compare characters, gil, retainers, FC chest gil, ventures, market value, MSQ, and collections in one view.
+- **Optional AutoRetainer Exclusions** — Hide characters omitted or excluded by current AutoRetainer releases from cross-character views, totals, searches, tooltips, IPC rosters/results, and all-character exports without deleting saved XA data; incompatible or unavailable IPC still fails open and shows all characters.
 - **Safe Character Cleanup** — Delete stored character snapshots from the Dashboard or Settings only while holding `Ctrl+Shift`.
-- **Auto-Save** — Save on login, logout, timers, and supported addon or window flows; successful logout saves now checkpoint WAL changes back into the base `xa.db` file for external file-copy consumers.
+- **Auto-Save** — Save on login, logout, manual refresh, and IPC requests. Optional timer and addon-close settings control additional disk saves; inventory-change capture does not force a save. Queued work stays with its originating character, and active Search results refresh after saving.
 - **Database Health Checks** — Run built-in health, read/write, and integrity checks from Settings.
+- **Migration Safety** — Back up existing data before schema or legacy-table migrations, apply upgrades transactionally, recover preserved high-bit FC identities during corrective migrations, and retain legacy tables unless the migrated character set passes completeness checks.
+- **Plugin Integration** — Share character data through 21 IPC channels, with safe responses when data is unavailable, separate save and refresh times in UTC and local time, and reliable IPC cleanup on reload or unload.
 - **Export** — Export current or saved character data to CSV or JSON, and open the actual `xa.db` folder directly from Settings.
 
 ## Commands
@@ -34,10 +41,6 @@ A Dalamud plugin for FINAL FANTASY XIV that collects character data — inventor
 ## Dependencies
 
 - **Optional:** [XA Slave](https://github.com/xa-io/XA-Slave) — Handles automation tasks and sends data via IPC
-
-## This Plugin is in Development
-
-This means that there are still features being implemented and enhanced. Suggestions and feature requests are welcome via github issues or by visiting the discord server for direct support.
 
 ## Installation
 

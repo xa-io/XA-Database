@@ -221,7 +221,7 @@ public partial class MainWindow
     {
         try
         {
-            return Plugin.PluginInterface.InstalledPlugins
+            return plugin.Services.PluginInterface.InstalledPlugins
                 .Any(p => p.InternalName == "AutoRetainer" && p.IsLoaded);
         }
         catch { return false; }

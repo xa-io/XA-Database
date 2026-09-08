@@ -4,7 +4,9 @@ using System.Text;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using Lumina.Excel.Sheets;
+using XADatabase.Core.Collection;
 using XADatabase.Models;
+using XADatabase.Services;
 
 namespace XADatabase.Collectors;
 
@@ -26,6 +28,26 @@ public static class RetainerCollector
         InventoryType.RetainerPage6,
         InventoryType.RetainerPage7,
     };
+
+    public static unsafe SectionResult<List<RetainerEntry>> CollectRetainerListSection(XaServices services, ulong ownerContentId = 0)
+    {
+        try
+        {
+            var manager = RetainerManager.Instance();
+            if (manager == null || !manager->IsReady)
+                return SectionResult<List<RetainerEntry>>.Unavailable([], "retainer manager is not ready");
+
+            var value = CollectRetainerList(ownerContentId);
+            return value.Count == 0
+                ? SectionResult<List<RetainerEntry>>.AuthoritativeEmpty(value)
+                : SectionResult<List<RetainerEntry>>.Available(value);
+        }
+        catch (Exception ex)
+        {
+            services.Log.Error(ex, "[XA] Retainer list collection failed.");
+            return SectionResult<List<RetainerEntry>>.Failed([], ex.Message);
+        }
+    }
 
     public static unsafe List<RetainerEntry> CollectRetainerList(ulong ownerContentId = 0)
     {
@@ -143,11 +165,15 @@ public static class RetainerCollector
         foreach (var page in RetainerPages)
         {
             var container = inventoryManager->GetInventoryContainer(page);
-            if (container != null && container->IsLoaded)
-                return true;
+            if (container == null || !container->IsLoaded)
+                return false;
         }
 
-        return false;
+        var crystalContainer = inventoryManager->GetInventoryContainer(InventoryType.RetainerCrystals);
+        if (crystalContainer == null || !crystalContainer->IsLoaded)
+            return false;
+
+        return true;
     }
 
     public static unsafe List<RetainerListingEntry> CollectActiveRetainerListings(IDataManager dataManager)
@@ -243,6 +269,32 @@ public static class RetainerCollector
                 {
                     ContainerName = $"Retainer Page {p + 1}",
                     ContainerType = (int)RetainerPages[p],
+                    SlotIndex = i,
+                    ItemId = slot->ItemId,
+                    ItemName = itemName,
+                    Quantity = slot->Quantity,
+                    IsHq = (slot->Flags & InventoryItem.ItemFlags.HighQuality) != 0,
+                });
+            }
+        }
+
+        var crystalContainer = inventoryManager->GetInventoryContainer(InventoryType.RetainerCrystals);
+        if (crystalContainer != null && crystalContainer->IsLoaded)
+        {
+            for (int i = 0; i < crystalContainer->Size; i++)
+            {
+                var slot = crystalContainer->GetInventorySlot(i);
+                if (slot == null || slot->ItemId == 0 || slot->IsSymbolic)
+                    continue;
+
+                var itemName = string.Empty;
+                if (itemSheet.TryGetRow(slot->ItemId, out var itemRow))
+                    itemName = itemRow.Name.ToString();
+
+                results.Add(new ContainerItemEntry
+                {
+                    ContainerName = "Retainer Crystals",
+                    ContainerType = (int)InventoryType.RetainerCrystals,
                     SlotIndex = i,
                     ItemId = slot->ItemId,
                     ItemName = itemName,

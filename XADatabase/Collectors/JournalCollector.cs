@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using FFXIVClientStructs.FFXIV.Component.GUI;
+using XADatabase.Core.Collection;
+using XADatabase.Core.Localization;
 using XADatabase.Models;
 using XADatabase.Services;
 
@@ -54,6 +56,7 @@ public static class JournalCollector
 
         var leveEntry = new CurrencyEntry
         {
+            Key = CurrencyIdentity.LeveAllowances,
             Category = LeveAllowanceCategory,
             Name = LeveAllowanceName,
             Amount = Math.Clamp(LastLeveAllowances.Value, 0, LeveAllowanceCap),
@@ -74,7 +77,33 @@ public static class JournalCollector
         currencies.Insert(insertIndex, leveEntry);
     }
 
-    public static unsafe void TryCollectFromOpenAddon()
+    public static unsafe SectionResult<int?> CollectSection(XaServices services)
+    {
+        try
+        {
+            var stage = AtkStage.Instance();
+            if (stage == null || stage->RaptureAtkUnitManager == null)
+                return SectionResult<int?>.Unavailable(LastLeveAllowances, "journal addon manager is not ready");
+
+            var addon = stage->RaptureAtkUnitManager->GetAddonByName(JournalAddonName);
+            if (addon == null || !addon->IsVisible || !addon->IsReady)
+                return SectionResult<int?>.Unavailable(LastLeveAllowances, "journal addon is not loaded");
+
+            var allText = AddonTextReader.ReadAllText(addon);
+            if (!TryResolveLeveAllowances(allText, out var value))
+                return SectionResult<int?>.Failed(LastLeveAllowances, "leve allowances could not be parsed from the loaded journal");
+
+            LastLeveAllowances = value;
+            return SectionResult<int?>.Available(value);
+        }
+        catch (Exception ex)
+        {
+            services.Log.Error(ex, "[XA] Journal collection failed.");
+            return SectionResult<int?>.Failed(LastLeveAllowances, ex.Message);
+        }
+    }
+
+    public static unsafe void TryCollectFromOpenAddon(XaServices services)
     {
         var stage = AtkStage.Instance();
         if (stage == null)
@@ -88,18 +117,18 @@ public static class JournalCollector
         if (addon == null || !addon->IsVisible || !addon->IsReady)
             return;
 
-        CollectFromAddon(addon);
+        CollectFromAddon(addon, services);
     }
 
-    public static unsafe void CollectFromAddon(nint addonPtr)
+    public static unsafe void CollectFromAddon(XaServices services, nint addonPtr)
     {
         if (addonPtr == nint.Zero)
             return;
 
-        CollectFromAddon((AtkUnitBase*)addonPtr);
+        CollectFromAddon((AtkUnitBase*)addonPtr, services);
     }
 
-    public static unsafe void CollectFromAddon(AtkUnitBase* addon)
+    private static unsafe void CollectFromAddon(AtkUnitBase* addon, XaServices services)
     {
         if (addon == null)
             return;
@@ -111,13 +140,19 @@ public static class JournalCollector
         if (LastLeveAllowances != leveAllowances)
         {
             LastLeveAllowances = leveAllowances;
-            Plugin.Log.Information($"[XA] Journal leve allowances from addon: {leveAllowances}");
+            services.Log.Information($"[XA] Journal leve allowances from addon: {leveAllowances}");
         }
     }
 
     private static bool IsLeveAllowanceEntry(CurrencyEntry? entry)
     {
-        return entry != null
+        if (entry == null)
+            return false;
+        if (entry.Key.Equals(CurrencyIdentity.LeveAllowances, StringComparison.Ordinal))
+            return true;
+
+        // Read compatibility for snapshots written before synthetic currencies had a key.
+        return string.IsNullOrWhiteSpace(entry.Key)
             && (entry.Name.Equals(LeveAllowanceName, StringComparison.OrdinalIgnoreCase)
                 || entry.Name.Equals("Leve Allowance", StringComparison.OrdinalIgnoreCase));
     }

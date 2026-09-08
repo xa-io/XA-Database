@@ -14,6 +14,8 @@ public class Configuration : IPluginConfiguration
     public bool SearchHoverTooltipEnabled { get; set; } = true;
     public int SearchHoverTooltipCharacterLimit { get; set; } = 3;
     public bool SearchItemContextMenuEnabled { get; set; } = true;
+    public bool HonorAutoRetainerExclusions { get; set; } = false;
+    public string FcMemberContentIdSalt { get; set; } = string.Empty;
 
     // Auto-save interval in minutes (0 = disabled, only manual/login/logout saves)
     public int AutoSaveIntervalMinutes { get; set; } = 0;

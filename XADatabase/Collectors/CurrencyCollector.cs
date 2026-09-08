@@ -4,7 +4,10 @@ using System.Linq;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using Lumina.Excel.Sheets;
+using XADatabase.Core.Collection;
+using XADatabase.Core.Localization;
 using XADatabase.Models;
+using XADatabase.Services;
 
 namespace XADatabase.Collectors;
 
@@ -144,6 +147,30 @@ public static class CurrencyCollector
         ["Tribal"] = 3,
     };
 
+    public static unsafe SectionResult<List<CurrencyEntry>> CollectSection(XaServices services)
+    {
+        try
+        {
+            var inventoryManager = InventoryManager.Instance();
+            if (inventoryManager == null)
+                return SectionResult<List<CurrencyEntry>>.Unavailable([], "inventory manager is not ready");
+
+            var currencyContainer = inventoryManager->GetInventoryContainer((InventoryType)CurrencyContainerType);
+            if (currencyContainer == null || !currencyContainer->IsLoaded)
+                return SectionResult<List<CurrencyEntry>>.Unavailable([], "currency container is not loaded");
+
+            var value = Collect(services.DataManager);
+            return value.Count == 0
+                ? SectionResult<List<CurrencyEntry>>.AuthoritativeEmpty(value)
+                : SectionResult<List<CurrencyEntry>>.Available(value);
+        }
+        catch (Exception ex)
+        {
+            services.Log.Error(ex, "[XA] Currency collection failed.");
+            return SectionResult<List<CurrencyEntry>>.Failed([], ex.Message);
+        }
+    }
+
     public static unsafe List<CurrencyEntry> Collect(IDataManager dataManager)
     {
         var resultsByItemId = new Dictionary<uint, CurrencyEntry>();
@@ -194,6 +221,8 @@ public static class CurrencyCollector
 
         resultsByItemId[itemId] = new CurrencyEntry
         {
+            ItemId = itemId,
+            Key = CurrencyIdentity.ResolveKey(itemId, string.Empty, name),
             Category = category,
             Name = name,
             Amount = amount,
@@ -203,30 +232,24 @@ public static class CurrencyCollector
 
     private static bool TryResolveCurrencyMetadata(uint itemId, IDataManager dataManager, out string category, out string name, out int cap)
     {
+        var itemSheet = dataManager.GetExcelSheet<Item>();
+        var localizedName = itemSheet.TryGetRow(itemId, out var itemRow)
+            ? itemRow.Name.ToString() ?? string.Empty
+            : string.Empty;
+        name = string.IsNullOrWhiteSpace(localizedName)
+            ? CurrencyIdentity.UnknownItemName(itemId)
+            : localizedName;
+
         if (CurrencyDefs.TryGetValue(itemId, out var metadata))
         {
             category = metadata.Category;
-            name = metadata.Name;
             cap = metadata.Cap;
             return true;
         }
 
-        var itemSheet = dataManager.GetExcelSheet<Item>();
-        if (itemSheet.TryGetRow(itemId, out var itemRow))
-        {
-            name = itemRow.Name.ToString() ?? string.Empty;
-            if (!string.IsNullOrWhiteSpace(name))
-            {
-                category = InferCategory(name);
-                cap = 0;
-                return true;
-            }
-        }
-
-        category = string.Empty;
-        name = string.Empty;
+        category = CurrencyIdentity.CategoryName(CurrencyCategory.Other);
         cap = 0;
-        return false;
+        return true;
     }
 
     private static string InferCategory(string name)

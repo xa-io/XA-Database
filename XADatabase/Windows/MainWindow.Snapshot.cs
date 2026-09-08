@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using XADatabase.Collectors;
+using XADatabase.Core.Collection;
 using XADatabase.Database;
 using XADatabase.Models;
 
@@ -18,16 +19,15 @@ public partial class MainWindow
         "Premium Saddlebag 2",
     };
 
-    private List<ContainerItemEntry> lastLiveCollectedItems = new();
-    private readonly HashSet<string> lastLoadedItemContainers = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<ulong> liveSessionRetainerListingIds = new();
     private readonly HashSet<ulong> liveSessionRetainerInventoryIds = new();
     private bool hasAuthoritativeLiveRetainerList;
-    private readonly Dictionary<ulong, XaCharacterSnapshotData> dashboardSnapshotCache = new();
-    private bool dashboardSnapshotCacheDirty = true;
+    private CharacterCacheState? retainedLiveCharacterCache;
 
     private void ApplySnapshotToCache(XaCharacterSnapshotData snapshot)
     {
+        cacheOwnerContentId = snapshot.Row.ContentId;
+        cacheOwnerCharacterName = snapshot.Row.CharacterName;
         cachedCurrencies = snapshot.Currencies;
         JournalCollector.SeedPersistedValue(snapshot.Currencies);
         cachedJobs = snapshot.Jobs;
@@ -46,8 +46,6 @@ public partial class MainWindow
         cachedPersonalEstate = snapshot.Row.PersonalEstate;
         cachedSharedEstates = snapshot.Row.SharedEstates;
         cachedApartment = snapshot.Row.Apartment;
-        lastLiveCollectedItems.Clear();
-        lastLoadedItemContainers.Clear();
         liveSessionRetainerListingIds.Clear();
         liveSessionRetainerInventoryIds.Clear();
         hasAuthoritativeLiveRetainerList = false;
@@ -63,147 +61,185 @@ public partial class MainWindow
 
     private void ResetCharacterScopedCache()
     {
-        cachedCurrencies.Clear();
-        cachedJobs.Clear();
-        cachedInventory.Clear();
-        cachedItems.Clear();
-        cachedRetainers.Clear();
-        cachedListings.Clear();
-        cachedRetainerItems.Clear();
+        // Repository snapshots own their parsed list instances. Replacing the UI
+        // references keeps a character switch from clearing SnapshotStore data.
+        cachedCurrencies = new List<CurrencyEntry>();
+        cachedJobs = new List<JobEntry>();
+        cachedInventory = new List<InventorySummary>();
+        cachedItems = new List<ContainerItemEntry>();
+        cachedRetainers = new List<RetainerEntry>();
+        cachedListings = new List<RetainerListingEntry>();
+        cachedRetainerItems = new List<RetainerInventoryItem>();
         cachedFc = null;
-        cachedFcMembers.Clear();
+        cachedFcMembers = new List<FcMemberEntry>();
         cachedSquadron = null;
         cachedVoyages = null;
-        cachedCollections.Clear();
-        cachedQuests.Clear();
-        cachedMsqMilestones.Clear();
+        cachedCollections = new List<CollectionSummary>();
+        cachedQuests = new List<ActiveQuestEntry>();
+        cachedMsqMilestones = new List<MsqMilestoneEntry>();
         cachedPersonalEstate = string.Empty;
         cachedSharedEstates = string.Empty;
         cachedApartment = string.Empty;
-        lastLiveCollectedItems.Clear();
-        lastLoadedItemContainers.Clear();
         liveSessionRetainerListingIds.Clear();
         liveSessionRetainerInventoryIds.Clear();
         hasAuthoritativeLiveRetainerList = false;
-        lastLiveContentId = 0;
+        cacheOwnerContentId = 0;
+        cacheOwnerCharacterName = string.Empty;
         lastPersistedSnapshotContentId = 0;
         lastPersistedSnapshot = null;
         DataCollected = false;
         lastRefreshTime = DateTime.MinValue;
         FreeCompanyCollector.ClearPersistedValues();
         FcMemberCollector.ClearPersistedValues();
+        VoyageCollector.ClearPersistedValues();
         JournalCollector.ClearPersistedValues();
         HousingCollector.ResetPersonalHousingState();
     }
 
+    private CharacterCacheState CaptureCharacterCacheState()
+    {
+        return new CharacterCacheState
+        {
+            Currencies = cachedCurrencies.ToList(),
+            Jobs = cachedJobs.ToList(),
+            Inventory = cachedInventory.ToList(),
+            Items = cachedItems.ToList(),
+            Retainers = cachedRetainers.ToList(),
+            Listings = cachedListings.ToList(),
+            RetainerItems = cachedRetainerItems.ToList(),
+            FreeCompany = cachedFc,
+            FcMembers = cachedFcMembers.ToList(),
+            Squadron = cachedSquadron,
+            Voyages = cachedVoyages,
+            Collections = cachedCollections.ToList(),
+            Quests = cachedQuests.ToList(),
+            MsqMilestones = cachedMsqMilestones.ToList(),
+            PersonalEstate = cachedPersonalEstate,
+            SharedEstates = cachedSharedEstates,
+            Apartment = cachedApartment,
+            OwnerContentId = cacheOwnerContentId,
+            OwnerCharacterName = cacheOwnerCharacterName,
+            DataCollected = DataCollected,
+            LastRefreshTime = lastRefreshTime,
+            LastPersistedSnapshotContentId = lastPersistedSnapshotContentId,
+            LastPersistedSnapshot = lastPersistedSnapshot,
+            CollectorSectionStates = new Dictionary<string, SectionState>(lastCollectorSectionStates, StringComparer.Ordinal),
+            LiveRetainerListingIds = liveSessionRetainerListingIds.ToHashSet(),
+            LiveRetainerInventoryIds = liveSessionRetainerInventoryIds.ToHashSet(),
+            HasAuthoritativeLiveRetainerList = hasAuthoritativeLiveRetainerList,
+        };
+    }
+
+    private void RestoreCharacterCacheState(CharacterCacheState state)
+    {
+        cachedCurrencies = state.Currencies;
+        cachedJobs = state.Jobs;
+        cachedInventory = state.Inventory;
+        cachedItems = state.Items;
+        cachedRetainers = state.Retainers;
+        cachedListings = state.Listings;
+        cachedRetainerItems = state.RetainerItems;
+        cachedFc = state.FreeCompany;
+        cachedFcMembers = state.FcMembers;
+        cachedSquadron = state.Squadron;
+        cachedVoyages = state.Voyages;
+        cachedCollections = state.Collections;
+        cachedQuests = state.Quests;
+        cachedMsqMilestones = state.MsqMilestones;
+        cachedPersonalEstate = state.PersonalEstate;
+        cachedSharedEstates = state.SharedEstates;
+        cachedApartment = state.Apartment;
+        cacheOwnerContentId = state.OwnerContentId;
+        cacheOwnerCharacterName = state.OwnerCharacterName;
+        DataCollected = state.DataCollected;
+        lastRefreshTime = state.LastRefreshTime;
+        lastPersistedSnapshotContentId = state.LastPersistedSnapshotContentId;
+        lastPersistedSnapshot = state.LastPersistedSnapshot;
+
+        lastCollectorSectionStates.Clear();
+        foreach (var entry in state.CollectorSectionStates)
+            lastCollectorSectionStates[entry.Key] = entry.Value;
+
+        liveSessionRetainerListingIds.Clear();
+        liveSessionRetainerListingIds.UnionWith(state.LiveRetainerListingIds);
+        liveSessionRetainerInventoryIds.Clear();
+        liveSessionRetainerInventoryIds.UnionWith(state.LiveRetainerInventoryIds);
+        hasAuthoritativeLiveRetainerList = state.HasAuthoritativeLiveRetainerList;
+
+        FreeCompanyCollector.ClearPersistedValues();
+        if (cachedFc != null)
+        {
+            FreeCompanyCollector.SeedPersistedValues(
+                cachedFc.FcPoints,
+                cachedFc.Estate,
+                cachedFc.Name,
+                cachedFc.Tag,
+                cachedFc.Rank,
+                cachedFc.FcGil,
+                cachedFc.FcGilObserved,
+                cachedFc.FcId);
+        }
+
+        JournalCollector.ClearPersistedValues();
+        JournalCollector.SeedPersistedValue(cachedCurrencies);
+    }
+
+    private void RememberLiveCharacterCache()
+    {
+        var playerState = plugin.Services.PlayerState;
+        if (!playerState.IsLoaded
+            || viewingContentId.HasValue
+            || !DataCollected
+            || cacheOwnerContentId == 0
+            || cacheOwnerContentId != playerState.ContentId)
+        {
+            return;
+        }
+
+        retainedLiveCharacterCache = CaptureCharacterCacheState();
+    }
+
     private void InvalidateDashboardSnapshotCache()
     {
-        dashboardSnapshotCacheDirty = true;
+        plugin.Snapshots.Invalidate();
     }
 
     private IReadOnlyDictionary<ulong, XaCharacterSnapshotData> GetDashboardSnapshotCache()
     {
-        if (!dashboardSnapshotCacheDirty)
-            return dashboardSnapshotCache;
-
-        dashboardSnapshotCache.Clear();
-        foreach (var snapshot in plugin.SnapshotRepo.GetAllSnapshots())
-            dashboardSnapshotCache[snapshot.Row.ContentId] = snapshot;
-
-        dashboardSnapshotCacheDirty = false;
-        return dashboardSnapshotCache;
+        return plugin.Snapshots.All();
     }
 
-    private void ApplyPersistedSaddlebagState(XaCharacterSnapshotData? persistedSnapshot, bool allowObservedSaddlebagClear)
-    {
-        var liveItems = (lastLiveCollectedItems.Count > 0 || lastLoadedItemContainers.Count > 0)
-            ? lastLiveCollectedItems
-            : cachedItems;
-
-        var mergedItems = liveItems
-            .Where(item => !IsSaddlebagContainerName(item.ContainerName))
-            .Select(CloneContainerItem)
+    private List<CharacterRow> GetVisibleCharacters()
+        => plugin.CharacterRepo.GetAll()
+            .Where(character => plugin.IsCharacterVisible(character.ContentId))
             .ToList();
 
-        var liveSaddlebagByContainer = liveItems
-            .Where(item => IsSaddlebagContainerName(item.ContainerName))
-            .GroupBy(item => item.ContainerName, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.Select(CloneContainerItem).ToList(), StringComparer.OrdinalIgnoreCase);
-
-        var persistedSaddlebagByContainer = (persistedSnapshot?.SaddlebagItems ?? new List<ContainerItemEntry>())
-            .Where(item => IsSaddlebagContainerName(item.ContainerName))
-            .GroupBy(item => item.ContainerName, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.Select(CloneContainerItem).ToList(), StringComparer.OrdinalIgnoreCase);
-
-        var saddlebagContainers = new HashSet<string>(SaddlebagContainerNames, StringComparer.OrdinalIgnoreCase);
-        saddlebagContainers.UnionWith(liveSaddlebagByContainer.Keys);
-        saddlebagContainers.UnionWith(persistedSaddlebagByContainer.Keys);
-
-        foreach (var containerName in saddlebagContainers)
-        {
-            if (liveSaddlebagByContainer.TryGetValue(containerName, out var liveContainerItems) && liveContainerItems.Count > 0)
-            {
-                mergedItems.AddRange(liveContainerItems);
-                continue;
-            }
-
-            if (lastLoadedItemContainers.Contains(containerName))
-            {
-                if (!allowObservedSaddlebagClear && persistedSaddlebagByContainer.TryGetValue(containerName, out var persistedLoadedContainerItems))
-                    mergedItems.AddRange(persistedLoadedContainerItems);
-
-                continue;
-            }
-
-            if (persistedSaddlebagByContainer.TryGetValue(containerName, out var persistedContainerItems))
-                mergedItems.AddRange(persistedContainerItems);
-        }
-
-        cachedItems = mergedItems;
-    }
-
-    private void ApplyPersistedSaddlebagInventorySummaries(XaCharacterSnapshotData? persistedSnapshot, bool allowObservedSaddlebagClear)
+    internal void OnCharacterVisibilityChanged()
     {
-        var mergedInventory = cachedInventory
-            .Where(summary => !IsSaddlebagContainerName(summary.Name))
-            .Select(CloneInventorySummary)
-            .ToList();
+        var hiddenViewedCharacter = viewingContentId.HasValue
+            && !plugin.IsCharacterVisible(viewingContentId.Value);
 
-        var liveSaddlebagSummaries = cachedInventory
-            .Where(summary => IsSaddlebagContainerName(summary.Name))
-            .ToDictionary(summary => summary.Name, CloneInventorySummary, StringComparer.OrdinalIgnoreCase);
+        knownCharacters = GetVisibleCharacters();
+        charListQueried = true;
+        selectedCharacterIndex = viewingContentId.HasValue
+            ? knownCharacters.FindIndex(character => character.ContentId == viewingContentId.Value)
+            : -1;
 
-        var persistedSaddlebagSummaries = (persistedSnapshot?.InventorySummaries ?? new List<InventorySummary>())
-            .Where(summary => IsSaddlebagContainerName(summary.Name))
-            .ToDictionary(summary => summary.Name, CloneInventorySummary, StringComparer.OrdinalIgnoreCase);
-
-        var saddlebagContainers = new HashSet<string>(SaddlebagContainerNames, StringComparer.OrdinalIgnoreCase);
-        saddlebagContainers.UnionWith(liveSaddlebagSummaries.Keys);
-        saddlebagContainers.UnionWith(persistedSaddlebagSummaries.Keys);
-
-        foreach (var containerName in saddlebagContainers)
+        if (hiddenViewedCharacter)
         {
-            if (lastLoadedItemContainers.Contains(containerName))
-            {
-                if (liveSaddlebagSummaries.TryGetValue(containerName, out var liveSummary))
-                    mergedInventory.Add(CloneInventorySummary(liveSummary));
-                else if (!allowObservedSaddlebagClear && persistedSaddlebagSummaries.TryGetValue(containerName, out var persistedLoadedSummary))
-                    mergedInventory.Add(CloneInventorySummary(persistedLoadedSummary));
-
-                continue;
-            }
-
-            if (persistedSaddlebagSummaries.TryGetValue(containerName, out var persistedSummary))
-            {
-                mergedInventory.Add(CloneInventorySummary(persistedSummary));
-                continue;
-            }
-
-            if (liveSaddlebagSummaries.TryGetValue(containerName, out var fallbackLiveSummary))
-                mergedInventory.Add(CloneInventorySummary(fallbackLiveSummary));
+            viewingContentId = null;
+            viewingCharName = string.Empty;
+            charSelectorSearch = string.Empty;
+            selectedCharacterIndex = -1;
+            if (plugin.Services.PlayerState.IsLoaded)
+                RefreshData();
+            else
+                ResetCharacterScopedCache();
         }
 
-        cachedInventory = mergedInventory;
+        InvalidateDashboardSnapshotCache();
+        RefreshItemSearchResults();
+        RefreshItemTooltipCache();
     }
 
     private void ApplyPersistedRetainerState(XaCharacterSnapshotData? persistedSnapshot)
@@ -279,33 +315,11 @@ public partial class MainWindow
         cachedRetainerItems = mergedRetainerItems;
     }
 
-    private bool IsSaddlebagClearConfirmed(SnapshotTrigger trigger)
-    {
-        return trigger == SnapshotTrigger.AddonWatcher
-            && lastAddonTrigger != null
-            && lastAddonTrigger.Category.Equals("Saddlebag", StringComparison.OrdinalIgnoreCase)
-            && lastAddonTrigger.AddonName.Equals("InventoryBuddy", StringComparison.OrdinalIgnoreCase);
-    }
-
     private static bool IsSaddlebagContainerName(string containerName)
     {
         return !string.IsNullOrWhiteSpace(containerName)
             && (containerName.StartsWith("Saddlebag ", StringComparison.OrdinalIgnoreCase)
                 || containerName.StartsWith("Premium Saddlebag ", StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static ContainerItemEntry CloneContainerItem(ContainerItemEntry item)
-    {
-        return new ContainerItemEntry
-        {
-            ContainerName = item.ContainerName,
-            ContainerType = item.ContainerType,
-            SlotIndex = item.SlotIndex,
-            ItemId = item.ItemId,
-            ItemName = item.ItemName,
-            Quantity = item.Quantity,
-            IsHq = item.IsHq,
-        };
     }
 
     private static InventorySummary CloneInventorySummary(InventorySummary summary)
@@ -423,18 +437,18 @@ public partial class MainWindow
         var persistedCharacter = plugin.CharacterRepo.Get(contentId);
 
         string world;
-        try { world = Plugin.PlayerState.HomeWorld.Value.Name.ToString(); }
+        try { world = plugin.Services.PlayerState.HomeWorld.Value.Name.ToString(); }
         catch { world = string.Empty; }
 
         if (string.IsNullOrWhiteSpace(world))
         {
-            try { world = Plugin.ObjectTable.LocalPlayer?.HomeWorld.Value.Name.ToString() ?? string.Empty; }
+            try { world = plugin.Services.ObjectTable.LocalPlayer?.HomeWorld.Value.Name.ToString() ?? string.Empty; }
             catch { world = string.Empty; }
         }
 
         if (string.IsNullOrWhiteSpace(world))
         {
-            try { world = Plugin.ObjectTable.LocalPlayer?.CurrentWorld.Value.Name.ToString() ?? string.Empty; }
+            try { world = plugin.Services.ObjectTable.LocalPlayer?.CurrentWorld.Value.Name.ToString() ?? string.Empty; }
             catch { world = string.Empty; }
         }
 
@@ -444,7 +458,7 @@ public partial class MainWindow
         var datacenter = XaCharacterSnapshotRepository.ResolveDatacenter(world);
         if (string.IsNullOrWhiteSpace(datacenter))
         {
-            try { datacenter = Plugin.ObjectTable.LocalPlayer?.HomeWorld.Value.DataCenter.Value.Name.ToString() ?? string.Empty; }
+            try { datacenter = plugin.Services.ObjectTable.LocalPlayer?.HomeWorld.Value.DataCenter.Value.Name.ToString() ?? string.Empty; }
             catch { datacenter = string.Empty; }
         }
 
@@ -656,8 +670,11 @@ public partial class MainWindow
             return new List<ItemLocationResult>();
 
         var results = new List<ItemLocationResult>();
-        foreach (var snapshot in plugin.SnapshotRepo.GetAllSnapshots())
+        foreach (var snapshot in plugin.Snapshots.ItemSections())
         {
+            if (!plugin.IsCharacterVisible(snapshot.ContentId))
+                continue;
+
             foreach (var item in snapshot.AllItems)
             {
                 if (string.IsNullOrWhiteSpace(item.ItemName) || item.ItemName.IndexOf(searchText, StringComparison.OrdinalIgnoreCase) < 0)
@@ -665,10 +682,10 @@ public partial class MainWindow
 
                 results.Add(new ItemLocationResult
                 {
-                    ContentId = snapshot.Row.ContentId,
-                    CharacterName = snapshot.Row.CharacterName,
-                    World = snapshot.Row.World,
-                    UpdatedUtc = snapshot.Row.UpdatedUtc,
+                    ContentId = snapshot.ContentId,
+                    CharacterName = snapshot.CharacterName,
+                    World = snapshot.World,
+                    UpdatedUtc = snapshot.UpdatedUtc,
                     ContainerName = item.ContainerName,
                     ItemId = item.ItemId,
                     ItemName = item.ItemName,
@@ -684,10 +701,10 @@ public partial class MainWindow
 
                 results.Add(new ItemLocationResult
                 {
-                    ContentId = snapshot.Row.ContentId,
-                    CharacterName = snapshot.Row.CharacterName,
-                    World = snapshot.Row.World,
-                    UpdatedUtc = snapshot.Row.UpdatedUtc,
+                    ContentId = snapshot.ContentId,
+                    CharacterName = snapshot.CharacterName,
+                    World = snapshot.World,
+                    UpdatedUtc = snapshot.UpdatedUtc,
                     ContainerName = $"Retainer: {item.RetainerName}",
                     ItemId = item.ItemId,
                     ItemName = item.ItemName,
@@ -715,7 +732,7 @@ public partial class MainWindow
         if (activeRetainerId == 0 || !RetainerCollector.IsActiveRetainerMarketLoaded())
             return;
 
-        var retainerListings = RetainerCollector.CollectActiveRetainerListings(Plugin.DataManager);
+        var retainerListings = RetainerCollector.CollectActiveRetainerListings(plugin.Services.DataManager);
         liveSessionRetainerListingIds.Add(activeRetainerId);
         cachedListings.RemoveAll(item => item.RetainerId == activeRetainerId);
         cachedListings.AddRange(retainerListings);
@@ -731,7 +748,7 @@ public partial class MainWindow
         if (activeRetainerId == 0 || !RetainerCollector.IsActiveRetainerInventoryLoaded())
             return;
 
-        var retainerInventory = RetainerCollector.CollectActiveRetainerInventory(Plugin.DataManager);
+        var retainerInventory = RetainerCollector.CollectActiveRetainerInventory(plugin.Services.DataManager);
         liveSessionRetainerInventoryIds.Add(activeRetainerId);
 
         var retainerName = cachedRetainers.FirstOrDefault(item => item.RetainerId == activeRetainerId)?.Name ?? string.Empty;
@@ -747,5 +764,36 @@ public partial class MainWindow
 
         cachedRetainerItems.RemoveAll(item => item.RetainerId == activeRetainerId);
         cachedRetainerItems.AddRange(retainerInvItems);
+    }
+
+    private sealed class CharacterCacheState
+    {
+        public List<CurrencyEntry> Currencies { get; init; } = new();
+        public List<JobEntry> Jobs { get; init; } = new();
+        public List<InventorySummary> Inventory { get; init; } = new();
+        public List<ContainerItemEntry> Items { get; init; } = new();
+        public List<RetainerEntry> Retainers { get; init; } = new();
+        public List<RetainerListingEntry> Listings { get; init; } = new();
+        public List<RetainerInventoryItem> RetainerItems { get; init; } = new();
+        public FreeCompanyEntry? FreeCompany { get; init; }
+        public List<FcMemberEntry> FcMembers { get; init; } = new();
+        public SquadronInfo? Squadron { get; init; }
+        public VoyageInfo? Voyages { get; init; }
+        public List<CollectionSummary> Collections { get; init; } = new();
+        public List<ActiveQuestEntry> Quests { get; init; } = new();
+        public List<MsqMilestoneEntry> MsqMilestones { get; init; } = new();
+        public string PersonalEstate { get; init; } = string.Empty;
+        public string SharedEstates { get; init; } = string.Empty;
+        public string Apartment { get; init; } = string.Empty;
+        public ulong OwnerContentId { get; init; }
+        public string OwnerCharacterName { get; init; } = string.Empty;
+        public bool DataCollected { get; init; }
+        public DateTime LastRefreshTime { get; init; }
+        public ulong LastPersistedSnapshotContentId { get; init; }
+        public XaCharacterSnapshotData? LastPersistedSnapshot { get; init; }
+        public Dictionary<string, SectionState> CollectorSectionStates { get; init; } = new(StringComparer.Ordinal);
+        public HashSet<ulong> LiveRetainerListingIds { get; init; } = new();
+        public HashSet<ulong> LiveRetainerInventoryIds { get; init; } = new();
+        public bool HasAuthoritativeLiveRetainerList { get; init; }
     }
 }

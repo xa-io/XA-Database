@@ -5,6 +5,7 @@ using System.Text;
 using FFXIVClientStructs.FFXIV.Client.UI.Info;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using XADatabase.Data;
+using XADatabase.Core.Collection;
 using XADatabase.Models;
 using XADatabase.Services;
 
@@ -73,6 +74,28 @@ public static class FreeCompanyCollector
     /// E.g. "Plot 4, 9th Ward, Empyreum (Small)"
     /// </summary>
     public static string LastEstate { get; private set; } = string.Empty;
+
+    public static SectionResult<FreeCompanyEntry?> CollectSection(XaServices services, bool canProveAuthoritativeEmpty)
+    {
+        try
+        {
+            TryCollectFromOpenAddons(services);
+            var value = Collect();
+            if (value == null)
+            {
+                return canProveAuthoritativeEmpty
+                    ? SectionResult<FreeCompanyEntry?>.AuthoritativeEmpty(null)
+                    : SectionResult<FreeCompanyEntry?>.Unavailable(null, "free-company identity is not authoritative in the current character context");
+            }
+
+            return SectionResult<FreeCompanyEntry?>.Available(value);
+        }
+        catch (Exception ex)
+        {
+            services.Log.Error(ex, "[XA] Free-company collection failed.");
+            return SectionResult<FreeCompanyEntry?>.Failed(null, ex.Message);
+        }
+    }
 
     public static unsafe FreeCompanyEntry? Collect()
     {
@@ -170,31 +193,31 @@ public static class FreeCompanyCollector
     /// Safe to call anytime — returns silently if addons are not open.
     /// Used by Refresh+Save so data appears while the windows are still open.
     /// </summary>
-    public static unsafe void TryCollectFromOpenAddons()
+    public static unsafe void TryCollectFromOpenAddons(XaServices services)
     {
         try
         {
             var fcAddon = GetAddonByName("FreeCompany");
             if (fcAddon != null && fcAddon->IsVisible && fcAddon->IsReady)
             {
-                Plugin.Log.Debug("[XA] FreeCompany addon is open — reading FC points.");
-                CollectFromAddon((nint)fcAddon);
+                services.Log.Debug("[XA] FreeCompany addon is open — reading FC points.");
+                CollectFromAddon(services, (nint)fcAddon);
             }
 
             var fcChestAddon = GetAddonByName("FreeCompanyChest");
             if (fcChestAddon != null && fcChestAddon->IsVisible && fcChestAddon->IsReady)
             {
-                Plugin.Log.Debug("[XA] FreeCompanyChest addon is open — reading FC chest gil.");
-                CollectChestGilFromAddon((nint)fcChestAddon);
+                services.Log.Debug("[XA] FreeCompanyChest addon is open — reading FC chest gil.");
+                CollectChestGilFromAddon(services, (nint)fcChestAddon);
             }
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] TryCollect FC error: {ex.Message}");
+            services.Log.Error($"[XA] TryCollect FC error: {ex.Message}");
         }
 
         // Try reading rank names from FC member list
-        TryCollectRankNamesFromAddon();
+        TryCollectRankNamesFromAddon(services);
     }
 
     /// <summary>
@@ -202,17 +225,17 @@ public static class FreeCompanyCollector
     /// Call this when the FreeCompany addon is open (PostSetup or on demand).
     /// FreeCompany addon node [15] (#17) = FC points text (e.g. "40,070")
     /// </summary>
-    public static unsafe void CollectFromAddon(nint addonPtr)
+    public static unsafe void CollectFromAddon(XaServices services, nint addonPtr)
     {
         try
         {
             if (addonPtr == nint.Zero)
             {
-                Plugin.Log.Debug("[XA] FreeCompany addon pointer is zero");
+                services.Log.Debug("[XA] FreeCompany addon pointer is zero");
                 return;
             }
             var addon = (AtkUnitBase*)addonPtr;
-            Plugin.Log.Debug($"[XA] FreeCompany addon: IsVisible={addon->IsVisible}, NodeCount={addon->UldManager.NodeListCount}");
+            services.Log.Debug($"[XA] FreeCompany addon: IsVisible={addon->IsVisible}, NodeCount={addon->UldManager.NodeListCount}");
 
             var allText = AddonTextReader.ReadAllText(addon);
 
@@ -222,7 +245,7 @@ public static class FreeCompanyCollector
                 if (path == "[23]" && nodeId == 8 && !string.IsNullOrWhiteSpace(text))
                 {
                     LastFcName = text.Trim();
-                    Plugin.Log.Information($"[XA] FC name from addon: \"{LastFcName}\"");
+                    services.Log.Information($"[XA] FC name from addon: \"{LastFcName}\"");
                 }
 
                 // FC Tag — node [22] (#9) e.g. " «Ozma»"
@@ -232,7 +255,7 @@ public static class FreeCompanyCollector
                     if (tag.Length > 0)
                     {
                         LastFcTag = tag;
-                        Plugin.Log.Information($"[XA] FC tag from addon: \"{LastFcTag}\"");
+                        services.Log.Information($"[XA] FC tag from addon: \"{LastFcTag}\"");
                     }
                 }
 
@@ -243,7 +266,7 @@ public static class FreeCompanyCollector
                     if (byte.TryParse(rankStr, out var rank) && rank >= 1 && rank <= 30)
                     {
                         LastFcRank = rank;
-                        Plugin.Log.Information($"[XA] FC rank from {path} (#{nodeId}): {rank} (raw: \"{text}\")");
+                        services.Log.Information($"[XA] FC rank from {path} (#{nodeId}): {rank} (raw: \"{text}\")");
                     }
                 }
 
@@ -252,13 +275,13 @@ public static class FreeCompanyCollector
                 if (int.TryParse(cleaned, out var points) && points > 100)
                 {
                     LastFcPoints = points;
-                    Plugin.Log.Information($"[XA] FC points from {path} (#{nodeId}): {points} (raw: \"{text}\")");
+                    services.Log.Information($"[XA] FC points from {path} (#{nodeId}): {points} (raw: \"{text}\")");
                 }
             }
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] CollectFromAddon error: {ex.Message}");
+            services.Log.Error($"[XA] CollectFromAddon error: {ex.Message}");
         }
     }
 
@@ -266,18 +289,18 @@ public static class FreeCompanyCollector
     /// Read FC chest gil from the FreeCompanyChest addon text nodes.
     /// Known gil node: [93]→[2] (#2), e.g. "69".
     /// </summary>
-    public static unsafe void CollectChestGilFromAddon(nint addonPtr)
+    public static unsafe void CollectChestGilFromAddon(XaServices services, nint addonPtr)
     {
         try
         {
             if (addonPtr == nint.Zero)
             {
-                Plugin.Log.Debug("[XA] FreeCompanyChest addon pointer is zero");
+                services.Log.Debug("[XA] FreeCompanyChest addon pointer is zero");
                 return;
             }
 
             var addon = (AtkUnitBase*)addonPtr;
-            Plugin.Log.Debug($"[XA] FreeCompanyChest addon: IsVisible={addon->IsVisible}, NodeCount={addon->UldManager.NodeListCount}");
+            services.Log.Debug($"[XA] FreeCompanyChest addon: IsVisible={addon->IsVisible}, NodeCount={addon->UldManager.NodeListCount}");
 
             var allText = AddonTextReader.ReadAllText(addon);
             foreach (var (path, nodeId, text) in allText)
@@ -292,13 +315,13 @@ public static class FreeCompanyCollector
                 HasObservedFcChestGil = true;
                 var proxy = InfoProxyFreeCompany.Instance();
                 LastObservedFcGilFcId = proxy != null ? proxy->Id : 0;
-                Plugin.Log.Information($"[XA] FC chest gil from {path} (#{nodeId}): {gil} (raw: \"{text}\")");
+                services.Log.Information($"[XA] FC chest gil from {path} (#{nodeId}): {gil} (raw: \"{text}\")");
                 break;
             }
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] CollectChestGilFromAddon error: {ex.Message}");
+            services.Log.Error($"[XA] CollectChestGilFromAddon error: {ex.Message}");
         }
     }
 
@@ -320,7 +343,7 @@ public static class FreeCompanyCollector
     ///   [32]→[N]→[28] (#8) = Character name (e.g. "Sprite Island")
     ///   [32]→[N]→[30]→[4] (#4) = Message (usually "-")
     /// </summary>
-    public static unsafe void TryCollectRankNamesFromAddon()
+    public static unsafe void TryCollectRankNamesFromAddon(XaServices services)
     {
         try
         {
@@ -370,7 +393,7 @@ public static class FreeCompanyCollector
                     if (!nameToRank.ContainsKey(data.Name))
                     {
                         nameToRank[data.Name] = data.Rank;
-                        Plugin.Log.Debug($"[XA] FCMember addon: \"{data.Name}\" → rank \"{data.Rank}\"");
+                        services.Log.Debug($"[XA] FCMember addon: \"{data.Name}\" → rank \"{data.Rank}\"");
                     }
                 }
             }
@@ -378,12 +401,12 @@ public static class FreeCompanyCollector
             if (nameToRank.Count > 0)
             {
                 LastAddonMemberRanks = nameToRank;
-                Plugin.Log.Information($"[XA] FCMember addon ranks: {string.Join(", ", nameToRank.Select(kv => $"\"{kv.Key}\"=\"{kv.Value}\""))}");
+                services.Log.Information($"[XA] FCMember addon ranks: {string.Join(", ", nameToRank.Select(kv => $"\"{kv.Key}\"=\"{kv.Value}\""))}");
             }
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] TryCollectRankNames error: {ex.Message}");
+            services.Log.Error($"[XA] TryCollectRankNames error: {ex.Message}");
         }
     }
 
@@ -391,17 +414,17 @@ public static class FreeCompanyCollector
     /// Read estate info from the HousingSignBoard addon text nodes.
     /// Node [50] (#21) = estate text (e.g. "Plot 4, 9th Ward, Empyreum (Small)")
     /// </summary>
-    public static unsafe void CollectEstateFromAddon(nint addonPtr)
+    public static unsafe void CollectEstateFromAddon(XaServices services, nint addonPtr)
     {
         try
         {
             if (addonPtr == nint.Zero)
             {
-                Plugin.Log.Debug("[XA] HousingSignBoard addon pointer is zero");
+                services.Log.Debug("[XA] HousingSignBoard addon pointer is zero");
                 return;
             }
             var addon = (AtkUnitBase*)addonPtr;
-            Plugin.Log.Debug($"[XA] HousingSignBoard addon: IsVisible={addon->IsVisible}, NodeCount={addon->UldManager.NodeListCount}");
+            services.Log.Debug($"[XA] HousingSignBoard addon: IsVisible={addon->IsVisible}, NodeCount={addon->UldManager.NodeListCount}");
 
             var allText = AddonTextReader.ReadAllText(addon);
 
@@ -414,7 +437,7 @@ public static class FreeCompanyCollector
                     if (text.Contains(","))
                     {
                         LastEstate = HousingPlotSizeData.ApplySizeSuffix(text.Trim());
-                        Plugin.Log.Information($"[XA] Estate from {path} (#{nodeId}): \"{LastEstate}\"");
+                        services.Log.Information($"[XA] Estate from {path} (#{nodeId}): \"{LastEstate}\"");
                         break;
                     }
                 }
@@ -422,7 +445,7 @@ public static class FreeCompanyCollector
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] CollectEstateFromAddon error: {ex.Message}");
+            services.Log.Error($"[XA] CollectEstateFromAddon error: {ex.Message}");
         }
     }
 

@@ -2,9 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
+using XADatabase.Core.Localization;
+using XADatabase.Core.Storage;
+using XADatabase.Core.Policies;
 using XADatabase.Data;
 using XADatabase.Models;
 
@@ -17,10 +21,7 @@ public sealed class XaCharacterSnapshotRepository
     {
         PropertyNameCaseInsensitive = true,
     };
-    private static readonly Regex PlotNumberRegex = new(@"\bPlot\s+(?<plot>\d+)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex WardNumberRegex = new(@"\b(?:Ward\s+(?<wardAfter>\d+)|(?<wardBefore>\d+)(?:st|nd|rd|th)\s+Ward)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex RoomNumberRegex = new(@"\bRoom\s+#?(?<room>\d+)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex ParentheticalTextRegex = new(@"\s*\([^)]*\)", RegexOptions.Compiled);
+    private static readonly Regex ParentheticalTextRegex = new(@"\s*[(（][^)）]*[)）]", RegexOptions.Compiled);
     private static readonly Regex OwnerSuffixRegex = new(@"\s*\[[^\]]+\]\s*$", RegexOptions.Compiled);
     private static readonly Regex WhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
 
@@ -38,7 +39,7 @@ public sealed class XaCharacterSnapshotRepository
             FROM xa_characters
             WHERE content_id = @cid
             LIMIT 1";
-        cmd.Parameters.AddWithValue("@cid", (long)contentId);
+        cmd.Parameters.AddTypedValue("@cid", contentId);
         using var reader = cmd.ExecuteReader();
         if (!reader.Read())
             return null;
@@ -50,7 +51,7 @@ public sealed class XaCharacterSnapshotRepository
 
         return new CharacterRow
         {
-            ContentId = (ulong)(long)reader["content_id"],
+            ContentId = SqliteIdentity.Decode((long)reader["content_id"]),
             Name = reader["character_name"].ToString() ?? string.Empty,
             World = reader["world"].ToString() ?? string.Empty,
             Datacenter = ResolveDatacenter(reader["world"].ToString() ?? string.Empty, reader["datacenter"].ToString() ?? string.Empty),
@@ -72,7 +73,7 @@ public sealed class XaCharacterSnapshotRepository
             FROM xa_characters
             WHERE content_id = @cid
             LIMIT 1";
-        cmd.Parameters.AddWithValue("@cid", (long)contentId);
+        cmd.Parameters.AddTypedValue("@cid", contentId);
         using var reader = cmd.ExecuteReader();
         if (!reader.Read())
             return null;
@@ -93,6 +94,107 @@ public sealed class XaCharacterSnapshotRepository
         while (reader.Read())
             results.Add(Parse(ReadRow(reader)));
         return results;
+    }
+
+    public List<XaCharacterRosterData> GetRoster()
+    {
+        var results = new List<XaCharacterRosterData>();
+        var conn = db.GetConnection();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT content_id, character_name, world, datacenter, region,
+                   snapshot_version, updated_utc, jobs_json
+            FROM xa_characters
+            ORDER BY updated_utc DESC, character_name ASC";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var parseErrors = new Dictionary<string, string>(StringComparer.Ordinal);
+            results.Add(new XaCharacterRosterData
+            {
+                ContentId = SqliteIdentity.Decode((long)reader["content_id"]),
+                CharacterName = reader["character_name"].ToString() ?? string.Empty,
+                World = reader["world"].ToString() ?? string.Empty,
+                Datacenter = ResolveDatacenter(reader["world"].ToString() ?? string.Empty, reader["datacenter"].ToString() ?? string.Empty),
+                Region = ResolveRegion(reader["world"].ToString() ?? string.Empty, reader["region"].ToString() ?? string.Empty),
+                SnapshotVersion = ReadInt32(reader, "snapshot_version"),
+                UpdatedUtc = reader["updated_utc"].ToString() ?? string.Empty,
+                Jobs = NormalizeJobs(DeserializeListTracked<JobEntry>(reader["jobs_json"].ToString(), "jobs_json", parseErrors)),
+                ParseErrors = parseErrors,
+            });
+        }
+        return results;
+    }
+
+    public List<XaCharacterItemsData> GetAllItemSections()
+    {
+        var results = new List<XaCharacterItemsData>();
+        var conn = db.GetConnection();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT content_id, character_name, world, updated_utc, snapshot_version,
+                   inventory_json, saddlebag_json, crystals_json, armoury_json,
+                   equipped_json, items_json, retainers_json, retainer_items_json
+            FROM xa_characters
+            ORDER BY updated_utc DESC, character_name ASC";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var parseErrors = new Dictionary<string, string>(StringComparer.Ordinal);
+            var snapshotVersion = ReadInt32(reader, "snapshot_version");
+            var inventory = DeserializeListTracked<ContainerItemEntry>(reader["inventory_json"].ToString(), "inventory_json", parseErrors);
+            var saddlebag = DeserializeListTracked<ContainerItemEntry>(reader["saddlebag_json"].ToString(), "saddlebag_json", parseErrors);
+            var crystals = DeserializeListTracked<ContainerItemEntry>(reader["crystals_json"].ToString(), "crystals_json", parseErrors);
+            var armoury = DeserializeListTracked<ContainerItemEntry>(reader["armoury_json"].ToString(), "armoury_json", parseErrors);
+            var equipped = DeserializeListTracked<ContainerItemEntry>(reader["equipped_json"].ToString(), "equipped_json", parseErrors);
+            var itemsJson = DeserializeListTracked<ContainerItemEntry>(reader["items_json"].ToString(), "items_json", parseErrors);
+            var allItems = snapshotVersion >= 3
+                ? inventory.Concat(saddlebag).Concat(crystals).Concat(armoury).Concat(equipped).Concat(itemsJson).ToList()
+                : itemsJson.Count > 0
+                    ? itemsJson
+                    : inventory.Concat(saddlebag).Concat(crystals).Concat(armoury).Concat(equipped).ToList();
+
+            results.Add(new XaCharacterItemsData
+            {
+                ContentId = SqliteIdentity.Decode((long)reader["content_id"]),
+                CharacterName = reader["character_name"].ToString() ?? string.Empty,
+                World = reader["world"].ToString() ?? string.Empty,
+                UpdatedUtc = reader["updated_utc"].ToString() ?? string.Empty,
+                AllItems = allItems,
+                Retainers = DeserializeListTracked<RetainerEntry>(reader["retainers_json"].ToString(), "retainers_json", parseErrors),
+                RetainerItems = DeserializeListTracked<RetainerInventoryItem>(reader["retainer_items_json"].ToString(), "retainer_items_json", parseErrors),
+                ParseErrors = parseErrors,
+            });
+        }
+        return results;
+    }
+
+    public (int FcGil, bool Observed, ulong SourceContentId) GetLatestObservedFcGil(ulong fcId)
+    {
+        var conn = db.GetConnection();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT content_id,
+                   json_extract(free_company_json, '$.FcGil') AS fc_gil,
+                   json_extract(free_company_json, '$.FcGilObserved') AS observed
+            FROM xa_characters
+            WHERE fc_id = @fcid
+              AND free_company_json IS NOT NULL
+              AND free_company_json != 'null'
+              AND json_valid(free_company_json)
+            ORDER BY updated_utc DESC
+            LIMIT 8";
+        cmd.Parameters.Add("@fcid", SqliteType.Integer).Value = SqliteIdentity.Encode(fcId);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var gil = ReadInt32(reader, "fc_gil");
+            var observed = ReadInt32(reader, "observed") == 1 || gil > 0;
+            if (observed)
+                return (gil, true, SqliteIdentity.Decode((long)reader["content_id"]));
+        }
+
+        return (0, false, 0);
     }
 
     public static XaCharacterSnapshotSections BuildSections(
@@ -155,7 +257,7 @@ public sealed class XaCharacterSnapshotRepository
             CrystalsJson = itemSections.CrystalsJson,
             ArmouryJson = itemSections.ArmouryJson,
             EquippedJson = itemSections.EquippedJson,
-            ItemsJson = Serialize(items, "[]"),
+            ItemsJson = itemSections.UnclassifiedJson,
             RetainersJson = Serialize(normalizedRetainers.Retainers, "[]"),
             ListingsJson = Serialize(normalizedRetainers.Listings, "[]"),
             RetainerItemsJson = Serialize(normalizedRetainers.RetainerItems, "[]"),
@@ -235,7 +337,7 @@ public sealed class XaCharacterSnapshotRepository
                 CrystalsJson = itemSections.CrystalsJson,
                 ArmouryJson = itemSections.ArmouryJson,
                 EquippedJson = itemSections.EquippedJson,
-                ItemsJson = Serialize(items, "[]"),
+                ItemsJson = itemSections.UnclassifiedJson,
                 RetainersJson = Serialize(normalizedRetainers.Retainers, "[]"),
                 ListingsJson = Serialize(normalizedRetainers.Listings, "[]"),
                 RetainerItemsJson = Serialize(normalizedRetainers.RetainerItems, "[]"),
@@ -316,23 +418,15 @@ public sealed class XaCharacterSnapshotRepository
 
     public static string NormalizeApartmentDisplayValue(string value)
     {
-        var normalizedValue = StripHousingOwnerSuffix(NormalizeHousingDisplayValue(value));
-        if (normalizedValue.Length == 0)
-            return string.Empty;
-
-        var roomNumber = ExtractNumber(RoomNumberRegex, normalizedValue, "room");
-        var wardNumber = ExtractWardNumber(normalizedValue);
-        var districtName = ExtractDistrictDisplayName(normalizedValue);
-        if (roomNumber > 0 && wardNumber > 0 && districtName.Length > 0)
-            return $"Room {roomNumber}, Ward {wardNumber}, {districtName}";
-
-        return normalizedValue;
+        return StripHousingOwnerSuffix(NormalizeHousingDisplayValue(value));
     }
 
     public static string PreferSizedPersonalEstateValue(string currentValue, string persistedValue)
     {
-        var normalizedCurrent = NormalizeEstateDisplayValue(StripHousingOwnerSuffix(currentValue));
-        var normalizedPersisted = NormalizeEstateDisplayValue(StripHousingOwnerSuffix(persistedValue));
+        var currentWithoutOwner = StripHousingOwnerSuffix(currentValue);
+        var persistedWithoutOwner = StripHousingOwnerSuffix(persistedValue);
+        var normalizedCurrent = NormalizeEstateDisplayValue(currentWithoutOwner);
+        var normalizedPersisted = NormalizeEstateDisplayValue(persistedWithoutOwner);
         if (normalizedCurrent.Length == 0)
             return normalizedPersisted;
         if (normalizedPersisted.Length == 0)
@@ -340,8 +434,8 @@ public sealed class XaCharacterSnapshotRepository
         if (!AddressesMatch(normalizedCurrent, normalizedPersisted))
             return normalizedCurrent;
 
-        var currentHasSizeSuffix = ParentheticalTextRegex.IsMatch(normalizedCurrent);
-        var persistedHasSizeSuffix = ParentheticalTextRegex.IsMatch(normalizedPersisted);
+        var currentHasSizeSuffix = ParentheticalTextRegex.IsMatch(currentWithoutOwner);
+        var persistedHasSizeSuffix = ParentheticalTextRegex.IsMatch(persistedWithoutOwner);
         if (!currentHasSizeSuffix && persistedHasSizeSuffix)
             return normalizedPersisted;
 
@@ -363,31 +457,43 @@ public sealed class XaCharacterSnapshotRepository
 
     private static XaCharacterSnapshotData Parse(XaCharacterSnapshotRow row)
     {
+        var parseErrors = new Dictionary<string, string>(StringComparer.Ordinal);
         var snapshot = new XaCharacterSnapshotData
         {
             Row = row,
-            InventorySummaries = DeserializeList<InventorySummary>(row.InventorySummariesJson),
-            Currencies = DeserializeList<CurrencyEntry>(row.CurrenciesJson),
-            Jobs = NormalizeJobs(DeserializeList<JobEntry>(row.JobsJson)),
-            InventoryItems = DeserializeList<ContainerItemEntry>(row.InventoryJson),
-            SaddlebagItems = DeserializeList<ContainerItemEntry>(row.SaddlebagJson),
-            CrystalItems = DeserializeList<ContainerItemEntry>(row.CrystalsJson),
-            ArmouryItems = DeserializeList<ContainerItemEntry>(row.ArmouryJson),
-            EquippedItems = DeserializeList<ContainerItemEntry>(row.EquippedJson),
-            AllItems = DeserializeList<ContainerItemEntry>(row.ItemsJson),
-            Retainers = DeserializeList<RetainerEntry>(row.RetainersJson),
-            Listings = DeserializeList<RetainerListingEntry>(row.ListingsJson),
-            RetainerItems = DeserializeList<RetainerInventoryItem>(row.RetainerItemsJson),
-            FreeCompany = DeserializeObject<FreeCompanyEntry>(row.FreeCompanyJson),
-            FcMembers = DeserializeList<FcMemberEntry>(row.FcMembersJson),
-            Squadron = DeserializeObject<SquadronInfo>(row.SquadronJson),
-            Voyages = DeserializeObject<VoyageInfo>(row.VoyagesJson),
-            Collections = DeserializeList<CollectionSummary>(row.CollectionsJson),
-            ActiveQuests = DeserializeList<ActiveQuestEntry>(row.ActiveQuestsJson),
-            MsqMilestones = DeserializeList<MsqMilestoneEntry>(row.MsqMilestonesJson),
+            InventorySummaries = DeserializeListTracked<InventorySummary>(row.InventorySummariesJson, "inventory_summaries_json", parseErrors),
+            Currencies = DeserializeListTracked<CurrencyEntry>(row.CurrenciesJson, "currencies_json", parseErrors),
+            Jobs = NormalizeJobs(DeserializeListTracked<JobEntry>(row.JobsJson, "jobs_json", parseErrors)),
+            InventoryItems = DeserializeListTracked<ContainerItemEntry>(row.InventoryJson, "inventory_json", parseErrors),
+            SaddlebagItems = DeserializeListTracked<ContainerItemEntry>(row.SaddlebagJson, "saddlebag_json", parseErrors),
+            CrystalItems = DeserializeListTracked<ContainerItemEntry>(row.CrystalsJson, "crystals_json", parseErrors),
+            ArmouryItems = DeserializeListTracked<ContainerItemEntry>(row.ArmouryJson, "armoury_json", parseErrors),
+            EquippedItems = DeserializeListTracked<ContainerItemEntry>(row.EquippedJson, "equipped_json", parseErrors),
+            AllItems = DeserializeListTracked<ContainerItemEntry>(row.ItemsJson, "items_json", parseErrors),
+            Retainers = DeserializeListTracked<RetainerEntry>(row.RetainersJson, "retainers_json", parseErrors),
+            Listings = DeserializeListTracked<RetainerListingEntry>(row.ListingsJson, "listings_json", parseErrors),
+            RetainerItems = DeserializeListTracked<RetainerInventoryItem>(row.RetainerItemsJson, "retainer_items_json", parseErrors),
+            FreeCompany = DeserializeObjectTracked<FreeCompanyEntry>(row.FreeCompanyJson, "free_company_json", parseErrors),
+            FcMembers = DeserializeListTracked<FcMemberEntry>(row.FcMembersJson, "fc_members_json", parseErrors),
+            Squadron = DeserializeObjectTracked<SquadronInfo>(row.SquadronJson, "squadron_json", parseErrors),
+            Voyages = DeserializeObjectTracked<VoyageInfo>(row.VoyagesJson, "voyages_json", parseErrors),
+            Collections = DeserializeListTracked<CollectionSummary>(row.CollectionsJson, "collections_json", parseErrors),
+            ActiveQuests = DeserializeListTracked<ActiveQuestEntry>(row.ActiveQuestsJson, "active_quests_json", parseErrors),
+            MsqMilestones = DeserializeListTracked<MsqMilestoneEntry>(row.MsqMilestonesJson, "msq_milestones_json", parseErrors),
+            ParseErrors = parseErrors,
         };
 
-        if (snapshot.AllItems.Count == 0)
+        if (row.SnapshotVersion >= 3)
+        {
+            snapshot.AllItems = snapshot.InventoryItems
+                .Concat(snapshot.SaddlebagItems)
+                .Concat(snapshot.CrystalItems)
+                .Concat(snapshot.ArmouryItems)
+                .Concat(snapshot.EquippedItems)
+                .Concat(snapshot.AllItems)
+                .ToList();
+        }
+        else if (snapshot.AllItems.Count == 0)
         {
             snapshot.AllItems = snapshot.InventoryItems
                 .Concat(snapshot.SaddlebagItems)
@@ -414,12 +520,12 @@ public sealed class XaCharacterSnapshotRepository
 
         return new XaCharacterSnapshotRow
         {
-            ContentId = (ulong)(long)reader["content_id"],
+            ContentId = SqliteIdentity.Decode((long)reader["content_id"]),
             CharacterName = reader["character_name"].ToString() ?? string.Empty,
             World = reader["world"].ToString() ?? string.Empty,
             Datacenter = ResolveDatacenter(reader["world"].ToString() ?? string.Empty, reader["datacenter"].ToString() ?? string.Empty),
             Region = ResolveRegion(reader["world"].ToString() ?? string.Empty, reader["region"].ToString() ?? string.Empty),
-            FcId = ReadUInt64(reader, "fc_id"),
+            FcId = SqliteIdentity.Decode(ReadInt64(reader, "fc_id")),
             FcName = reader["fc_name"].ToString() ?? string.Empty,
             FcTag = reader["fc_tag"].ToString() ?? string.Empty,
             FcPoints = ReadInt32(reader, "fc_points"),
@@ -466,13 +572,25 @@ public sealed class XaCharacterSnapshotRepository
     private static XaCharacterItemSections BuildItemSections(IEnumerable<ContainerItemEntry> items)
     {
         var itemList = items.ToList();
+        var classifiedItems = new HashSet<ContainerItemEntry>();
+        var inventory = itemList.Where(i => IsInventoryContainer(i.ContainerName)).ToList();
+        var saddlebag = itemList.Where(i => IsSaddlebagContainer(i.ContainerName)).ToList();
+        var crystals = itemList.Where(i => IsCrystalsContainer(i.ContainerName)).ToList();
+        var armoury = itemList.Where(i => IsArmouryContainer(i.ContainerName)).ToList();
+        var equipped = itemList.Where(i => IsEquippedContainer(i.ContainerName)).ToList();
+        classifiedItems.UnionWith(inventory);
+        classifiedItems.UnionWith(saddlebag);
+        classifiedItems.UnionWith(crystals);
+        classifiedItems.UnionWith(armoury);
+        classifiedItems.UnionWith(equipped);
         return new XaCharacterItemSections
         {
-            InventoryJson = Serialize(itemList.Where(i => IsInventoryContainer(i.ContainerName)).ToList(), "[]"),
-            SaddlebagJson = Serialize(itemList.Where(i => IsSaddlebagContainer(i.ContainerName)).ToList(), "[]"),
-            CrystalsJson = Serialize(itemList.Where(i => IsCrystalsContainer(i.ContainerName)).ToList(), "[]"),
-            ArmouryJson = Serialize(itemList.Where(i => IsArmouryContainer(i.ContainerName)).ToList(), "[]"),
-            EquippedJson = Serialize(itemList.Where(i => IsEquippedContainer(i.ContainerName)).ToList(), "[]"),
+            InventoryJson = Serialize(inventory, "[]"),
+            SaddlebagJson = Serialize(saddlebag, "[]"),
+            CrystalsJson = Serialize(crystals, "[]"),
+            ArmouryJson = Serialize(armoury, "[]"),
+            EquippedJson = Serialize(equipped, "[]"),
+            UnclassifiedJson = Serialize(itemList.Where(item => !classifiedItems.Contains(item)).ToList(), "[]"),
         };
     }
 
@@ -516,16 +634,33 @@ public sealed class XaCharacterSnapshotRepository
         }).ToList();
     }
 
-    public static (List<RetainerEntry> Retainers, List<RetainerListingEntry> Listings, List<RetainerInventoryItem> RetainerItems) NormalizeRetainerPayload(
+    public static (List<RetainerEntry> Retainers, List<RetainerListingEntry> Listings, List<RetainerInventoryItem> RetainerItems, List<string> Warnings) NormalizeRetainerPayload(
         IEnumerable<RetainerEntry> retainers,
         IEnumerable<RetainerListingEntry> listings,
         IEnumerable<RetainerInventoryItem> retainerItems,
         ulong expectedOwnerContentId = 0)
     {
-        var normalizedRetainers = retainers
+        var warnings = new List<string>();
+        var candidates = retainers
             .Where(retainer => retainer != null && retainer.RetainerId != 0)
             .Select(retainer => StampRetainerOwnerContentId(retainer, expectedOwnerContentId))
-            .Where(retainer => expectedOwnerContentId == 0 || retainer.OwnerContentId == expectedOwnerContentId)
+            .ToList();
+        var mismatchedRetainers = expectedOwnerContentId == 0
+            ? new List<RetainerEntry>()
+            : candidates.Where(retainer => retainer.OwnerContentId != expectedOwnerContentId).ToList();
+
+        foreach (var retainer in mismatchedRetainers)
+        {
+            var warning = OwnerValidation.DescribeMismatch(
+                expectedOwnerContentId,
+                retainer.OwnerContentId,
+                $"Retainer '{retainer.Name}' ({retainer.RetainerId})")!;
+            Plugin.Log.Warning($"[XA] {warning}");
+            warnings.Add(warning);
+        }
+
+        var normalizedRetainers = candidates
+            .Where(retainer => !mismatchedRetainers.Contains(retainer))
             .GroupBy(retainer => retainer.RetainerId)
             .Select(group => group
                 .OrderByDescending(GetRetainerCompletenessScore)
@@ -535,7 +670,7 @@ public sealed class XaCharacterSnapshotRepository
             .ToList();
 
         if (normalizedRetainers.Count == 0)
-            return (new List<RetainerEntry>(), new List<RetainerListingEntry>(), new List<RetainerInventoryItem>());
+            return (new List<RetainerEntry>(), new List<RetainerListingEntry>(), new List<RetainerInventoryItem>(), warnings);
 
         var retainerIds = normalizedRetainers.Select(retainer => retainer.RetainerId).ToHashSet();
         var retainerNames = normalizedRetainers.ToDictionary(retainer => retainer.RetainerId, retainer => retainer.Name ?? string.Empty);
@@ -565,7 +700,7 @@ public sealed class XaCharacterSnapshotRepository
             })
             .ToList();
 
-        return (normalizedRetainers, normalizedListings, normalizedRetainerItems);
+        return (normalizedRetainers, normalizedListings, normalizedRetainerItems, warnings);
     }
 
     public static string BuildRetainerOwnerReferencesJson(IEnumerable<RetainerEntry> retainers, ulong expectedOwnerContentId = 0)
@@ -636,19 +771,30 @@ public sealed class XaCharacterSnapshotRepository
         return value.Trim().ToUpperInvariant();
     }
 
-    private static string Serialize<T>(T value, string fallbackJson)
+    private static string Serialize<T>(
+        T value,
+        string fallbackJson,
+        [CallerArgumentExpression(nameof(value))] string sectionName = "snapshot section")
     {
+        _ = fallbackJson;
         try
         {
             return JsonSerializer.Serialize(value, JsonOptions);
         }
-        catch
+        catch (Exception ex)
         {
-            return fallbackJson;
+            Plugin.Log.Error($"[XA] Failed to serialize snapshot section '{sectionName}': {ex.Message}");
+            throw new SnapshotSerializationException(sectionName, ex);
         }
     }
 
     private static List<T> DeserializeList<T>(string? json)
+        => DeserializeListTracked<T>(json, typeof(T).Name, new Dictionary<string, string>(StringComparer.Ordinal));
+
+    private static List<T> DeserializeListTracked<T>(
+        string? json,
+        string sectionName,
+        IDictionary<string, string> parseErrors)
     {
         if (string.IsNullOrWhiteSpace(json))
             return new List<T>();
@@ -657,13 +803,21 @@ public sealed class XaCharacterSnapshotRepository
         {
             return JsonSerializer.Deserialize<List<T>>(json, JsonOptions) ?? new List<T>();
         }
-        catch
+        catch (Exception ex)
         {
+            parseErrors[sectionName] = ex.Message;
+            Plugin.Log.Error($"[XA] Snapshot section '{sectionName}' is unreadable: {ex.Message}");
             return new List<T>();
         }
     }
 
     private static T? DeserializeObject<T>(string? json) where T : class
+        => DeserializeObjectTracked<T>(json, typeof(T).Name, new Dictionary<string, string>(StringComparer.Ordinal));
+
+    private static T? DeserializeObjectTracked<T>(
+        string? json,
+        string sectionName,
+        IDictionary<string, string> parseErrors) where T : class
     {
         if (string.IsNullOrWhiteSpace(json))
             return null;
@@ -672,9 +826,46 @@ public sealed class XaCharacterSnapshotRepository
         {
             return JsonSerializer.Deserialize<T>(json, JsonOptions);
         }
-        catch
+        catch (Exception ex)
         {
+            parseErrors[sectionName] = ex.Message;
+            Plugin.Log.Error($"[XA] Snapshot section '{sectionName}' is unreadable: {ex.Message}");
             return null;
+        }
+    }
+
+    public static void PreserveUnreadableSections(
+        XaCharacterSnapshotSections candidate,
+        XaCharacterSnapshotData? persistedSnapshot)
+    {
+        if (persistedSnapshot == null || persistedSnapshot.ParseErrors.Count == 0)
+            return;
+
+        var row = persistedSnapshot.Row;
+        foreach (var sectionName in persistedSnapshot.ParseErrors.Keys)
+        {
+            switch (sectionName)
+            {
+                case "inventory_summaries_json": candidate.InventorySummariesJson = row.InventorySummariesJson; break;
+                case "free_company_json": candidate.FreeCompanyJson = row.FreeCompanyJson; break;
+                case "fc_members_json": candidate.FcMembersJson = row.FcMembersJson; break;
+                case "currencies_json": candidate.CurrenciesJson = row.CurrenciesJson; break;
+                case "jobs_json": candidate.JobsJson = row.JobsJson; break;
+                case "inventory_json": candidate.InventoryJson = row.InventoryJson; break;
+                case "saddlebag_json": candidate.SaddlebagJson = row.SaddlebagJson; break;
+                case "crystals_json": candidate.CrystalsJson = row.CrystalsJson; break;
+                case "armoury_json": candidate.ArmouryJson = row.ArmouryJson; break;
+                case "equipped_json": candidate.EquippedJson = row.EquippedJson; break;
+                case "items_json": candidate.ItemsJson = row.ItemsJson; break;
+                case "retainers_json": candidate.RetainersJson = row.RetainersJson; break;
+                case "listings_json": candidate.ListingsJson = row.ListingsJson; break;
+                case "retainer_items_json": candidate.RetainerItemsJson = row.RetainerItemsJson; break;
+                case "collections_json": candidate.CollectionsJson = row.CollectionsJson; break;
+                case "active_quests_json": candidate.ActiveQuestsJson = row.ActiveQuestsJson; break;
+                case "msq_milestones_json": candidate.MsqMilestonesJson = row.MsqMilestonesJson; break;
+                case "squadron_json": candidate.SquadronJson = row.SquadronJson; break;
+                case "voyages_json": candidate.VoyagesJson = row.VoyagesJson; break;
+            }
         }
     }
 
@@ -770,55 +961,9 @@ public sealed class XaCharacterSnapshotRepository
         if (normalizedValue.Length == 0)
             return string.Empty;
 
-        var plotNumber = ExtractNumber(PlotNumberRegex, normalizedValue, "plot");
-        var wardNumber = ExtractWardNumber(normalizedValue);
-        var districtName = ExtractDistrictName(normalizedValue);
-        if (plotNumber <= 0 || wardNumber <= 0 || districtName.Length == 0)
-            return string.Empty;
-
-        return $"plot:{plotNumber}|ward:{wardNumber}|district:{districtName}";
-    }
-
-    private static int ExtractWardNumber(string value)
-    {
-        var match = WardNumberRegex.Match(value);
-        if (!match.Success)
-            return 0;
-
-        if (int.TryParse(match.Groups["wardAfter"].Value, out var wardAfter))
-            return wardAfter;
-
-        if (int.TryParse(match.Groups["wardBefore"].Value, out var wardBefore))
-            return wardBefore;
-
-        return 0;
-    }
-
-    private static int ExtractNumber(Regex regex, string value, string groupName)
-    {
-        var match = regex.Match(value);
-        if (!match.Success)
-            return 0;
-
-        return int.TryParse(match.Groups[groupName].Value, out var parsedValue) ? parsedValue : 0;
-    }
-
-    private static string ExtractDistrictName(string value)
-    {
-        return NormalizeHousingTextForComparison(ExtractDistrictDisplayName(value));
-    }
-
-    private static string ExtractDistrictDisplayName(string value)
-    {
-        var segments = StripHousingOwnerSuffix(value)
-            .Split(',', StringSplitOptions.RemoveEmptyEntries)
-            .Select(segment => segment.Trim())
-            .Where(segment => segment.Length > 0)
-            .ToArray();
-        if (segments.Length == 0)
-            return string.Empty;
-
-        return ParentheticalTextRegex.Replace(segments[^1], string.Empty).Trim().Trim(',', ' ');
+        return HousingAddressIdentity.TryBuildComparisonKey(normalizedValue, out var key)
+            ? key
+            : string.Empty;
     }
 
     private static string NormalizeHousingDisplayValue(string value)
@@ -1009,27 +1154,27 @@ public sealed class XaCharacterSnapshotRepository
 
 public sealed class XaCharacterSnapshotSections
 {
-    public string InventorySummariesJson { get; init; } = "[]";
-    public string CharacterJson { get; init; } = "{}";
-    public string FreeCompanyJson { get; init; } = "null";
-    public string FcMembersJson { get; init; } = "[]";
-    public string CurrenciesJson { get; init; } = "[]";
-    public string JobsJson { get; init; } = "[]";
-    public string InventoryJson { get; init; } = "[]";
-    public string SaddlebagJson { get; init; } = "[]";
-    public string CrystalsJson { get; init; } = "[]";
-    public string ArmouryJson { get; init; } = "[]";
-    public string EquippedJson { get; init; } = "[]";
-    public string ItemsJson { get; init; } = "[]";
-    public string RetainersJson { get; init; } = "[]";
-    public string ListingsJson { get; init; } = "[]";
-    public string RetainerItemsJson { get; init; } = "[]";
-    public string CollectionsJson { get; init; } = "[]";
-    public string ActiveQuestsJson { get; init; } = "[]";
-    public string MsqMilestonesJson { get; init; } = "[]";
-    public string SquadronJson { get; init; } = "null";
-    public string VoyagesJson { get; init; } = "null";
-    public string ValidationJson { get; init; } = "{}";
+    public string InventorySummariesJson { get; set; } = "[]";
+    public string CharacterJson { get; set; } = "{}";
+    public string FreeCompanyJson { get; set; } = "null";
+    public string FcMembersJson { get; set; } = "[]";
+    public string CurrenciesJson { get; set; } = "[]";
+    public string JobsJson { get; set; } = "[]";
+    public string InventoryJson { get; set; } = "[]";
+    public string SaddlebagJson { get; set; } = "[]";
+    public string CrystalsJson { get; set; } = "[]";
+    public string ArmouryJson { get; set; } = "[]";
+    public string EquippedJson { get; set; } = "[]";
+    public string ItemsJson { get; set; } = "[]";
+    public string RetainersJson { get; set; } = "[]";
+    public string ListingsJson { get; set; } = "[]";
+    public string RetainerItemsJson { get; set; } = "[]";
+    public string CollectionsJson { get; set; } = "[]";
+    public string ActiveQuestsJson { get; set; } = "[]";
+    public string MsqMilestonesJson { get; set; } = "[]";
+    public string SquadronJson { get; set; } = "null";
+    public string VoyagesJson { get; set; } = "null";
+    public string ValidationJson { get; set; } = "{}";
 }
 
 public sealed class XaCharacterSnapshotRow
@@ -1085,6 +1230,7 @@ public sealed class XaCharacterSnapshotRow
 public sealed class XaCharacterSnapshotData
 {
     public XaCharacterSnapshotRow Row { get; init; } = new();
+    public IReadOnlyDictionary<string, string> ParseErrors { get; init; } = new Dictionary<string, string>();
     public List<InventorySummary> InventorySummaries { get; set; } = new();
     public List<CurrencyEntry> Currencies { get; set; } = new();
     public List<JobEntry> Jobs { get; set; } = new();
@@ -1106,6 +1252,39 @@ public sealed class XaCharacterSnapshotData
     public List<MsqMilestoneEntry> MsqMilestones { get; set; } = new();
 }
 
+public sealed class XaCharacterRosterData
+{
+    public ulong ContentId { get; init; }
+    public string CharacterName { get; init; } = string.Empty;
+    public string World { get; init; } = string.Empty;
+    public string Datacenter { get; init; } = string.Empty;
+    public string Region { get; init; } = string.Empty;
+    public int SnapshotVersion { get; init; }
+    public string UpdatedUtc { get; init; } = string.Empty;
+    public List<JobEntry> Jobs { get; init; } = new();
+    public IReadOnlyDictionary<string, string> ParseErrors { get; init; } = new Dictionary<string, string>();
+}
+
+public sealed class XaCharacterItemsData
+{
+    public ulong ContentId { get; init; }
+    public string CharacterName { get; init; } = string.Empty;
+    public string World { get; init; } = string.Empty;
+    public string UpdatedUtc { get; init; } = string.Empty;
+    public List<ContainerItemEntry> AllItems { get; init; } = new();
+    public List<RetainerEntry> Retainers { get; init; } = new();
+    public List<RetainerInventoryItem> RetainerItems { get; init; } = new();
+    public IReadOnlyDictionary<string, string> ParseErrors { get; init; } = new Dictionary<string, string>();
+}
+
+public sealed class SnapshotSerializationException : Exception
+{
+    public SnapshotSerializationException(string sectionName, Exception innerException)
+        : base($"Snapshot serialization failed for section '{sectionName}'.", innerException)
+    {
+    }
+}
+
 internal sealed class XaCharacterItemSections
 {
     public string InventoryJson { get; init; } = "[]";
@@ -1113,4 +1292,5 @@ internal sealed class XaCharacterItemSections
     public string CrystalsJson { get; init; } = "[]";
     public string ArmouryJson { get; init; } = "[]";
     public string EquippedJson { get; init; } = "[]";
+    public string UnclassifiedJson { get; init; } = "[]";
 }

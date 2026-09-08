@@ -1,5 +1,6 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+using XADatabase.Core.Storage;
 using XADatabase.Models;
 
 namespace XADatabase.Database;
@@ -16,7 +17,7 @@ public class FcMemberRepository
     public void SaveMembers(ulong fcId, List<FcMemberEntry> members)
     {
         var conn = db.GetConnection();
-        var now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
+        var now = SnapshotTime.Format(DateTime.UtcNow);
 
         var ownTransaction = !db.HasActiveTransaction;
         var transaction = ownTransaction ? conn.BeginTransaction() : null;
@@ -26,7 +27,7 @@ public class FcMemberRepository
             using (var delCmd = conn.CreateCommand())
             {
                 delCmd.CommandText = "DELETE FROM fc_members WHERE fc_id = @fcid";
-                delCmd.Parameters.AddWithValue("@fcid", (long)fcId);
+                delCmd.Parameters.AddTypedValue("@fcid", fcId);
                 delCmd.ExecuteNonQuery();
             }
 
@@ -39,20 +40,20 @@ public class FcMemberRepository
                         current_world, current_world_name, home_world, home_world_name, grand_company, rank_sort, rank_name, updated_utc)
                     VALUES (@fcid, @mcid, @name, @job, @jobname, @online,
                         @cw, @cwname, @hw, @hwname, @gc, @rank, @rankname, @now)";
-                cmd.Parameters.AddWithValue("@fcid", (long)fcId);
-                cmd.Parameters.AddWithValue("@mcid", (long)m.ContentId);
-                cmd.Parameters.AddWithValue("@name", m.Name);
-                cmd.Parameters.AddWithValue("@job", (int)m.Job);
-                cmd.Parameters.AddWithValue("@jobname", m.JobName);
-                cmd.Parameters.AddWithValue("@online", (int)m.OnlineStatus);
-                cmd.Parameters.AddWithValue("@cw", (int)m.CurrentWorld);
-                cmd.Parameters.AddWithValue("@cwname", m.CurrentWorldName);
-                cmd.Parameters.AddWithValue("@hw", (int)m.HomeWorld);
-                cmd.Parameters.AddWithValue("@hwname", m.HomeWorldName);
-                cmd.Parameters.AddWithValue("@gc", (int)m.GrandCompany);
-                cmd.Parameters.AddWithValue("@rank", (int)m.RankSort);
-                cmd.Parameters.AddWithValue("@rankname", m.RankName);
-                cmd.Parameters.AddWithValue("@now", now);
+                cmd.Parameters.AddTypedValue("@fcid", fcId);
+                cmd.Parameters.AddTypedValue("@mcid", m.ContentId);
+                cmd.Parameters.AddTypedValue("@name", m.Name);
+                cmd.Parameters.AddTypedValue("@job", (int)m.Job);
+                cmd.Parameters.AddTypedValue("@jobname", m.JobName);
+                cmd.Parameters.AddTypedValue("@online", (int)m.OnlineStatus);
+                cmd.Parameters.AddTypedValue("@cw", (int)m.CurrentWorld);
+                cmd.Parameters.AddTypedValue("@cwname", m.CurrentWorldName);
+                cmd.Parameters.AddTypedValue("@hw", (int)m.HomeWorld);
+                cmd.Parameters.AddTypedValue("@hwname", m.HomeWorldName);
+                cmd.Parameters.AddTypedValue("@gc", (int)m.GrandCompany);
+                cmd.Parameters.AddTypedValue("@rank", (int)m.RankSort);
+                cmd.Parameters.AddTypedValue("@rankname", m.RankName);
+                cmd.Parameters.AddTypedValue("@now", now);
                 cmd.ExecuteNonQuery();
             }
 
@@ -77,13 +78,13 @@ public class FcMemberRepository
             SELECT member_content_id, name, job, job_name, online_status,
                    current_world, current_world_name, home_world, home_world_name, grand_company, rank_sort, rank_name
             FROM fc_members WHERE fc_id = @fcid ORDER BY rank_sort, name";
-        cmd.Parameters.AddWithValue("@fcid", (long)fcId);
+        cmd.Parameters.AddTypedValue("@fcid", fcId);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
             results.Add(new FcMemberEntry
             {
-                ContentId = (ulong)(long)reader["member_content_id"],
+                ContentId = SqliteIdentity.Decode((long)reader["member_content_id"]),
                 Name = reader["name"].ToString() ?? "",
                 Job = (byte)Convert.ToInt32(reader["job"]),
                 JobName = reader["job_name"].ToString() ?? "",

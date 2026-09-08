@@ -106,9 +106,10 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
     {
         try
         {
-            var snapshots = plugin.SnapshotRepo.GetAllSnapshots();
+            var snapshots = plugin.Snapshots.ItemSections()
+                .Where(snapshot => plugin.IsCharacterVisible(snapshot.ContentId));
             var snapshotItems = snapshots.ToDictionary(
-                snapshot => snapshot.Row.ContentId,
+                snapshot => snapshot.ContentId,
                 CreateCachedSnapshot);
             var rebuilt = BuildSummaries(snapshotItems.Values);
 
@@ -138,6 +139,37 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
     {
         if (contentId == 0)
             return;
+
+        if (!plugin.IsCharacterVisible(contentId))
+        {
+            List<CachedCharacterTooltipSnapshot> visibleSnapshots;
+            int hiddenGeneration;
+            lock (syncRoot)
+            {
+                cachedSnapshotItems.Remove(contentId);
+                visibleSnapshots = cachedSnapshotItems.Values.ToList();
+                hiddenGeneration = ++cacheGeneration;
+            }
+
+            _ = Task.Run(() => BuildSummaries(visibleSnapshots)).ContinueWith(task =>
+            {
+                if (task.IsFaulted)
+                {
+                    log.Warning(task.Exception, "[XA] Failed to remove an excluded character from the item tooltip cache.");
+                    return;
+                }
+
+                if (task.IsCanceled)
+                    return;
+
+                lock (syncRoot)
+                {
+                    if (hiddenGeneration == cacheGeneration)
+                        cachedSummaries = task.Result;
+                }
+            }, TaskScheduler.Default);
+            return;
+        }
 
         var snapshot = new CachedCharacterTooltipSnapshot(
             contentId,
@@ -361,13 +393,13 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
             pair => pair.Value.ToSummary());
     }
 
-    private static CachedCharacterTooltipSnapshot CreateCachedSnapshot(XaCharacterSnapshotData snapshot)
+    private static CachedCharacterTooltipSnapshot CreateCachedSnapshot(XaCharacterItemsData snapshot)
     {
         return new CachedCharacterTooltipSnapshot(
-            snapshot.Row.ContentId,
-            snapshot.Row.CharacterName,
-            snapshot.Row.World,
-            snapshot.Row.UpdatedUtc,
+            snapshot.ContentId,
+            snapshot.CharacterName,
+            snapshot.World,
+            snapshot.UpdatedUtc,
             snapshot.AllItems.Select(item => new CachedTooltipItem(
                 item.ItemId,
                 item.IsHq,
@@ -488,17 +520,17 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
             character.TotalQuantity += quantity;
             character.Locations.Add(locationName);
 
-            if (DateTime.TryParse(updatedUtc, out var parsedUpdated))
+            if (SnapshotTime.TryParseUtc(updatedUtc, out var parsedUpdated))
             {
-                if (!DateTime.TryParse(character.UpdatedUtc, out var existingUpdated) || parsedUpdated > existingUpdated)
-                    character.UpdatedUtc = parsedUpdated.ToString("O");
+                if (!SnapshotTime.TryParseUtc(character.UpdatedUtc, out var existingUpdated) || parsedUpdated > existingUpdated)
+                    character.UpdatedUtc = SnapshotTime.Format(parsedUpdated);
             }
         }
 
         public OwnedItemTooltipSummary ToSummary()
         {
             var orderedCharacters = characters.Values
-                .OrderByDescending(character => DateTime.TryParse(character.UpdatedUtc, out var updatedUtc) ? updatedUtc : DateTime.MinValue)
+                .OrderByDescending(character => SnapshotTime.TryParseUtc(character.UpdatedUtc, out var updatedUtc) ? updatedUtc : DateTime.MinValue)
                 .ThenByDescending(character => character.TotalQuantity)
                 .ThenBy(character => character.CharacterName, StringComparer.OrdinalIgnoreCase)
                 .Select(character => new OwnedItemTooltipCharacterSummary(

@@ -183,8 +183,11 @@ public partial class MainWindow
     {
         var results = new List<ItemLocationResult>();
 
-        foreach (var snapshot in plugin.SnapshotRepo.GetAllSnapshots())
+        foreach (var snapshot in plugin.Snapshots.ItemSections())
         {
+            if (!plugin.IsCharacterVisible(snapshot.ContentId))
+                continue;
+
             foreach (var item in snapshot.AllItems)
             {
                 if (item.ItemId != request.ItemId || item.IsHq != request.IsHq)
@@ -203,7 +206,7 @@ public partial class MainWindow
         }
 
         var orderedResults = results
-            .OrderByDescending(r => r.UpdatedUtc, StringComparer.Ordinal)
+            .OrderByDescending(r => SnapshotTime.TryParseUtc(r.UpdatedUtc, out var updatedUtc) ? updatedUtc : DateTime.MinValue)
             .ThenBy(r => r.CharacterName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(r => r.ContainerName, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -212,7 +215,7 @@ public partial class MainWindow
     }
 
     private static ItemLocationResult BuildItemLocationResult(
-        XaCharacterSnapshotData snapshot,
+        XaCharacterItemsData snapshot,
         string containerName,
         uint itemId,
         string itemName,
@@ -221,10 +224,10 @@ public partial class MainWindow
     {
         return new ItemLocationResult
         {
-            ContentId = snapshot.Row.ContentId,
-            CharacterName = snapshot.Row.CharacterName,
-            World = snapshot.Row.World,
-            UpdatedUtc = snapshot.Row.UpdatedUtc,
+            ContentId = snapshot.ContentId,
+            CharacterName = snapshot.CharacterName,
+            World = snapshot.World,
+            UpdatedUtc = snapshot.UpdatedUtc,
             ContainerName = containerName,
             ItemId = itemId,
             ItemName = itemName,
@@ -266,12 +269,12 @@ public partial class MainWindow
     {
         if (itemId >= 2_000_000)
         {
-            var eventItems = Plugin.DataManager.GetExcelSheet<EventItem>();
+            var eventItems = plugin.Services.DataManager.GetExcelSheet<EventItem>();
             if (eventItems != null && eventItems.TryGetRow(itemId, out var eventItem))
                 return eventItem.Singular.ToString();
         }
 
-        var items = Plugin.DataManager.GetExcelSheet<Item>();
+        var items = plugin.Services.DataManager.GetExcelSheet<Item>();
         return items != null && items.TryGetRow(itemId, out var item)
             ? item.Name.ToString()
             : string.Empty;

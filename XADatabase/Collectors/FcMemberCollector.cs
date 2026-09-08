@@ -1,14 +1,37 @@
 ﻿using System;
 using System.Collections.Generic;
-using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.UI.Info;
 using Lumina.Excel.Sheets;
+using XADatabase.Core.Collection;
 using XADatabase.Models;
+using XADatabase.Services;
 
 namespace XADatabase.Collectors;
 
 public static class FcMemberCollector
 {
+    public static unsafe SectionResult<List<FcMemberEntry>> CollectSection(
+        XaServices services,
+        Func<ulong, ulong> protectContentId)
+    {
+        try
+        {
+            var proxy = InfoProxyFreeCompanyMember.Instance();
+            if (proxy == null || proxy->GetEntryCount() == 0)
+                return SectionResult<List<FcMemberEntry>>.Unavailable([], "FC member list is not loaded");
+
+            var value = Collect(services, protectContentId);
+            return value.Count == 0
+                ? SectionResult<List<FcMemberEntry>>.AuthoritativeEmpty(value)
+                : SectionResult<List<FcMemberEntry>>.Available(value);
+        }
+        catch (Exception ex)
+        {
+            services.Log.Error(ex, "[XA] FC member collection failed.");
+            return SectionResult<List<FcMemberEntry>>.Failed([], ex.Message);
+        }
+    }
+
     /// <summary>
     /// FC tag extracted from first member's CharacterData.FCTagString.
     /// Set after Collect() runs successfully.
@@ -25,7 +48,9 @@ public static class FcMemberCollector
     /// Returns empty list if FC member data hasn't been loaded by the client
     /// (e.g. the FC member list window hasn't been opened yet this session).
     /// </summary>
-    public static unsafe List<FcMemberEntry> Collect(IDataManager dataManager)
+    public static unsafe List<FcMemberEntry> Collect(
+        XaServices services,
+        Func<ulong, ulong> protectContentId)
     {
         var results = new List<FcMemberEntry>();
 
@@ -37,8 +62,8 @@ public static class FcMemberCollector
         if (count == 0)
             return results;
 
-        var classJobSheet = dataManager.GetExcelSheet<ClassJob>();
-        var worldSheet = dataManager.GetExcelSheet<World>();
+        var classJobSheet = services.DataManager.GetExcelSheet<ClassJob>();
+        var worldSheet = services.DataManager.GetExcelSheet<World>();
 
         // Grab FC tag from first entry
         LastCollectedFcTag = string.Empty;
@@ -89,7 +114,7 @@ public static class FcMemberCollector
 
                 results.Add(new FcMemberEntry
                 {
-                    ContentId = entry->ContentId,
+                    ContentId = protectContentId(entry->ContentId),
                     Name = name,
                     Job = entry->Job,
                     JobName = jobName,
@@ -104,7 +129,7 @@ public static class FcMemberCollector
             }
             catch (Exception ex)
             {
-                Plugin.Log.Error($"[XA] Error reading FC member {i}: {ex}");
+                services.Log.Error($"[XA] Error reading FC member {i}: {ex}");
             }
         }
 

@@ -1,5 +1,6 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+using XADatabase.Core.Storage;
 using XADatabase.Data;
 using XADatabase.Models;
 
@@ -14,7 +15,7 @@ public class FreeCompanyRepository
     public void Save(ulong contentId, FreeCompanyEntry fc)
     {
         var conn = db.GetConnection();
-        var now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
+        var now = SnapshotTime.Format(DateTime.UtcNow);
 
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
@@ -34,20 +35,20 @@ public class FreeCompanyRepository
                 fc_points = CASE WHEN @pts > 0 THEN @pts ELSE free_companies.fc_points END,
                 estate = CASE WHEN @estate != '' THEN @estate ELSE free_companies.estate END,
                 updated_utc = @now";
-        cmd.Parameters.AddWithValue("@fcid", (long)fc.FcId);
-        cmd.Parameters.AddWithValue("@cid", (long)contentId);
-        cmd.Parameters.AddWithValue("@name", fc.Name);
-        cmd.Parameters.AddWithValue("@tag", fc.Tag);
-        cmd.Parameters.AddWithValue("@master", fc.Master);
-        cmd.Parameters.AddWithValue("@rank", (int)fc.Rank);
-        cmd.Parameters.AddWithValue("@gc", (int)fc.GrandCompany);
-        cmd.Parameters.AddWithValue("@gcname", fc.GrandCompanyName);
-        cmd.Parameters.AddWithValue("@online", (int)fc.OnlineMembers);
-        cmd.Parameters.AddWithValue("@total", (int)fc.TotalMembers);
-        cmd.Parameters.AddWithValue("@hwid", (int)fc.HomeWorldId);
-        cmd.Parameters.AddWithValue("@pts", fc.FcPoints);
-        cmd.Parameters.AddWithValue("@estate", HousingPlotSizeData.ApplySizeSuffix(fc.Estate ?? ""));
-        cmd.Parameters.AddWithValue("@now", now);
+        cmd.Parameters.AddTypedValue("@fcid", fc.FcId);
+        cmd.Parameters.AddTypedValue("@cid", contentId);
+        cmd.Parameters.AddTypedValue("@name", fc.Name);
+        cmd.Parameters.AddTypedValue("@tag", fc.Tag);
+        cmd.Parameters.AddTypedValue("@master", fc.Master);
+        cmd.Parameters.AddTypedValue("@rank", (int)fc.Rank);
+        cmd.Parameters.AddTypedValue("@gc", (int)fc.GrandCompany);
+        cmd.Parameters.AddTypedValue("@gcname", fc.GrandCompanyName);
+        cmd.Parameters.AddTypedValue("@online", (int)fc.OnlineMembers);
+        cmd.Parameters.AddTypedValue("@total", (int)fc.TotalMembers);
+        cmd.Parameters.AddTypedValue("@hwid", (int)fc.HomeWorldId);
+        cmd.Parameters.AddTypedValue("@pts", fc.FcPoints);
+        cmd.Parameters.AddTypedValue("@estate", HousingPlotSizeData.ApplySizeSuffix(fc.Estate ?? ""));
+        cmd.Parameters.AddTypedValue("@now", now);
         cmd.ExecuteNonQuery();
     }
 
@@ -62,14 +63,14 @@ public class FreeCompanyRepository
         cmd.CommandText = @"
             SELECT fc_id, name, tag, master, rank, grand_company, grand_company_name, online_members, total_members, home_world_id, fc_points, estate
             FROM free_companies WHERE content_id = @cid LIMIT 1";
-        cmd.Parameters.AddWithValue("@cid", (long)contentId);
+        cmd.Parameters.AddTypedValue("@cid", contentId);
         using var reader = cmd.ExecuteReader();
         if (!reader.Read())
             return null;
 
         return new FreeCompanyEntry
         {
-            FcId = (ulong)(long)reader["fc_id"],
+            FcId = SqliteIdentity.Decode((long)reader["fc_id"]),
             Name = reader["name"].ToString() ?? "",
             Tag = reader["tag"].ToString() ?? "",
             Master = reader["master"].ToString() ?? "",
@@ -100,7 +101,7 @@ public class FreeCompanyRepository
         {
             results.Add(new FreeCompanyEntry
             {
-                FcId = (ulong)(long)reader["fc_id"],
+                FcId = SqliteIdentity.Decode((long)reader["fc_id"]),
                 Name = reader["name"].ToString() ?? "",
                 Tag = reader["tag"].ToString() ?? "",
                 Master = reader["master"].ToString() ?? "",

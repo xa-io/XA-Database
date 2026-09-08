@@ -2,6 +2,8 @@
 using System.Collections.Generic;
 using Dalamud.Plugin.Services;
 using Lumina.Excel.Sheets;
+using XADatabase.Core.Collection;
+using XADatabase.Services;
 
 namespace XADatabase.Collectors;
 
@@ -80,6 +82,25 @@ public static class JobCollector
         }
 
         return map;
+    }
+
+    public static SectionResult<List<Models.JobEntry>> CollectSection(XaServices services)
+    {
+        try
+        {
+            if (!services.PlayerState.IsLoaded)
+                return SectionResult<List<Models.JobEntry>>.Unavailable([], "player job data is not loaded");
+
+            var value = Collect(services.PlayerState, services.DataManager);
+            return value.Count == 0
+                ? SectionResult<List<Models.JobEntry>>.AuthoritativeEmpty(value)
+                : SectionResult<List<Models.JobEntry>>.Available(value);
+        }
+        catch (Exception ex)
+        {
+            services.Log.Error(ex, "[XA] Job collection failed.");
+            return SectionResult<List<Models.JobEntry>>.Failed([], ex.Message);
+        }
     }
 
     public static List<Models.JobEntry> Collect(IPlayerState playerState, IDataManager dataManager)

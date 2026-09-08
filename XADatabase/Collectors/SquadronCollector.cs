@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using Lumina.Excel.Sheets;
+using XADatabase.Core.Collection;
 using XADatabase.Models;
+using XADatabase.Services;
 
 namespace XADatabase.Collectors;
 
@@ -13,7 +15,24 @@ public static class SquadronCollector
     /// Collect GC Squadron data from GcArmyManager.
     /// Returns null if squadron is not unlocked or data unavailable.
     /// </summary>
-    public static unsafe SquadronInfo? Collect(IDataManager dataManager)
+    public static unsafe SectionResult<SquadronInfo?> CollectSection(XaServices services)
+    {
+        try
+        {
+            var manager = GcArmyManager.Instance();
+            if (manager == null || manager->GetMemberCount() == 0)
+                return SectionResult<SquadronInfo?>.Unavailable(null, "squadron data is not loaded");
+
+            return SectionResult<SquadronInfo?>.Available(Collect(services));
+        }
+        catch (Exception ex)
+        {
+            services.Log.Error(ex, "[XA] Squadron collection failed.");
+            return SectionResult<SquadronInfo?>.Failed(null, ex.Message);
+        }
+    }
+
+    public static unsafe SquadronInfo? Collect(XaServices services)
     {
         var mgr = GcArmyManager.Instance();
         if (mgr == null)
@@ -23,8 +42,8 @@ public static class SquadronCollector
         if (memberCount == 0)
             return null;
 
-        var classJobSheet = dataManager.GetExcelSheet<ClassJob>();
-        var enpcSheet = dataManager.GetExcelSheet<ENpcResident>();
+        var classJobSheet = services.DataManager.GetExcelSheet<ClassJob>();
+        var enpcSheet = services.DataManager.GetExcelSheet<ENpcResident>();
 
         var members = new List<SquadronMemberEntry>();
         for (uint i = 0; i < memberCount; i++)
@@ -78,7 +97,7 @@ public static class SquadronCollector
             }
             catch (Exception ex)
             {
-                Plugin.Log.Error($"[XA] Error reading squadron member {i}: {ex}");
+                services.Log.Error($"[XA] Error reading squadron member {i}: {ex}");
             }
         }
 
@@ -88,7 +107,7 @@ public static class SquadronCollector
         {
             if (mgr->Data != null && mgr->Data->CurrentExpedition > 0)
             {
-                var expSheet = dataManager.GetExcelSheet<GcArmyExpedition>();
+                var expSheet = services.DataManager.GetExcelSheet<GcArmyExpedition>();
                 if (expSheet != null)
                 {
                     var row = expSheet.GetRow(mgr->Data->CurrentExpedition);

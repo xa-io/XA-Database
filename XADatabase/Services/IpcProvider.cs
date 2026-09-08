@@ -1,43 +1,26 @@
-﻿using System;
+using System;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
 using Dalamud.Plugin.Services;
+using XADatabase.Core.Policies;
 
 namespace XADatabase.Services;
 
-/// <summary>
-/// Exposes IPC calls so other plugins (e.g. XA Slave) can interact with XA Database.
-/// All channel names are prefixed with "XA.Database." for namespacing.
-///
-/// Available IPC calls:
-///   XA.Database.Save              (Action)         — Refresh live data + save snapshot to DB
-///   XA.Database.Refresh           (Action)         — Refresh live data only (no DB save)
-///   XA.Database.IsReady           (Func → bool)    — True when player is loaded
-///   XA.Database.GetDbPath         (Func → string)  — Absolute path to xa.db
-///   XA.Database.GetVersion        (Func → string)  — Plugin version string
-///   XA.Database.GetCharacterName  (Func → string)  — Current character name
-///   XA.Database.GetGil            (Func → int)     — Current character gil
-///   XA.Database.GetRetainerGil    (Func → long)    — Total retainer gil
-///   XA.Database.GetFcInfo         (Func → string)  — FC name|tag|points|rank pipe-delimited
-///   XA.Database.GetPlotInfo       (Func → string)  — FC estate info
-///   XA.Database.GetPersonalPlotInfo (Func → string) — Personal estate + apartment pipe-delimited
-///   XA.Database.SearchItems       (Func(string) → string) — Cross-character item search
-///   XA.Database.GetMatchingCharactersForItems (Func(string) → string) — Exact item-key character matching
-///   XA.Database.SearchCurrentCharacterItemsJson (Func(string) → string) — Current-character scoped item search JSON
-///   XA.Database.GetAccountCharacterListJson (Func → string) — Merged roster JSON of all saved character snapshots
-/// </summary>
+/// <summary>Registers and contains the 21 XA.Database.* IPC contract channels.</summary>
 public sealed class IpcProvider : IDisposable
 {
     private readonly IPluginLog log;
+    private readonly IFramework framework;
+    private readonly IpcRegistrationCleanup registrations = new();
+    private readonly object lifecycleGate = new();
+    private bool initialized;
+    private bool disposed;
 
-    // Core IPC channels
     private readonly ICallGateProvider<object> saveProvider;
     private readonly ICallGateProvider<object> refreshProvider;
     private readonly ICallGateProvider<bool> isReadyProvider;
     private readonly ICallGateProvider<string> getDbPathProvider;
     private readonly ICallGateProvider<string> getVersionProvider;
-
-    // Data query IPC channels
     private readonly ICallGateProvider<string> getCharacterNameProvider;
     private readonly ICallGateProvider<int> getGilProvider;
     private readonly ICallGateProvider<long> getRetainerGilProvider;
@@ -55,127 +38,130 @@ public sealed class IpcProvider : IDisposable
     private readonly ICallGateProvider<string, string> getMatchingCharactersForItemsProvider;
     private readonly ICallGateProvider<string, string> searchCurrentCharacterItemsJsonProvider;
 
-    public IpcProvider(IDalamudPluginInterface pluginInterface, IPluginLog log)
+    public IpcProvider(IDalamudPluginInterface pluginInterface, IPluginLog log, IFramework framework)
     {
         this.log = log;
-
-        // Core channels
-        saveProvider = pluginInterface.GetIpcProvider<object>("XA.Database.Save");
-        refreshProvider = pluginInterface.GetIpcProvider<object>("XA.Database.Refresh");
-        isReadyProvider = pluginInterface.GetIpcProvider<bool>("XA.Database.IsReady");
-        getDbPathProvider = pluginInterface.GetIpcProvider<string>("XA.Database.GetDbPath");
-        getVersionProvider = pluginInterface.GetIpcProvider<string>("XA.Database.GetVersion");
-
-        // Data query channels
-        getCharacterNameProvider = pluginInterface.GetIpcProvider<string>("XA.Database.GetCharacterName");
-        getGilProvider = pluginInterface.GetIpcProvider<int>("XA.Database.GetGil");
-        getRetainerGilProvider = pluginInterface.GetIpcProvider<long>("XA.Database.GetRetainerGil");
-        getFcInfoProvider = pluginInterface.GetIpcProvider<string>("XA.Database.GetFcInfo");
-        getFcNameProvider = pluginInterface.GetIpcProvider<string>("XA.Database.GetFcName");
-        getFcTagProvider = pluginInterface.GetIpcProvider<string>("XA.Database.GetFcTag");
-        getFcPointsProvider = pluginInterface.GetIpcProvider<int>("XA.Database.GetFcPoints");
-        getPlotInfoProvider = pluginInterface.GetIpcProvider<string>("XA.Database.GetPlotInfo");
-        getPersonalPlotInfoProvider = pluginInterface.GetIpcProvider<string>("XA.Database.GetPersonalPlotInfo");
-        getApartmentProvider = pluginInterface.GetIpcProvider<string>("XA.Database.GetApartment");
-        getCharacterSummaryJsonProvider = pluginInterface.GetIpcProvider<string>("XA.Database.GetCharacterSummaryJson");
-        getAccountCharacterListJsonProvider = pluginInterface.GetIpcProvider<string>("XA.Database.GetAccountCharacterListJson");
-        getLastSnapshotResultJsonProvider = pluginInterface.GetIpcProvider<string>("XA.Database.GetLastSnapshotResultJson");
-        searchItemsProvider = pluginInterface.GetIpcProvider<string, string>("XA.Database.SearchItems");
-        getMatchingCharactersForItemsProvider = pluginInterface.GetIpcProvider<string, string>("XA.Database.GetMatchingCharactersForItems");
-        searchCurrentCharacterItemsJsonProvider = pluginInterface.GetIpcProvider<string, string>("XA.Database.SearchCurrentCharacterItemsJson");
-
-        log.Information("[XA] IPC provider registered (XA.Database.*).");
+        this.framework = framework;
+        saveProvider = pluginInterface.GetIpcProvider<object>(IpcContractInfo.Save);
+        refreshProvider = pluginInterface.GetIpcProvider<object>(IpcContractInfo.Refresh);
+        isReadyProvider = pluginInterface.GetIpcProvider<bool>(IpcContractInfo.IsReady);
+        getDbPathProvider = pluginInterface.GetIpcProvider<string>(IpcContractInfo.GetDbPath);
+        getVersionProvider = pluginInterface.GetIpcProvider<string>(IpcContractInfo.GetVersion);
+        getCharacterNameProvider = pluginInterface.GetIpcProvider<string>(IpcContractInfo.GetCharacterName);
+        getGilProvider = pluginInterface.GetIpcProvider<int>(IpcContractInfo.GetGil);
+        getRetainerGilProvider = pluginInterface.GetIpcProvider<long>(IpcContractInfo.GetRetainerGil);
+        getFcInfoProvider = pluginInterface.GetIpcProvider<string>(IpcContractInfo.GetFcInfo);
+        getFcNameProvider = pluginInterface.GetIpcProvider<string>(IpcContractInfo.GetFcName);
+        getFcTagProvider = pluginInterface.GetIpcProvider<string>(IpcContractInfo.GetFcTag);
+        getFcPointsProvider = pluginInterface.GetIpcProvider<int>(IpcContractInfo.GetFcPoints);
+        getPlotInfoProvider = pluginInterface.GetIpcProvider<string>(IpcContractInfo.GetPlotInfo);
+        getPersonalPlotInfoProvider = pluginInterface.GetIpcProvider<string>(IpcContractInfo.GetPersonalPlotInfo);
+        getApartmentProvider = pluginInterface.GetIpcProvider<string>(IpcContractInfo.GetApartment);
+        getCharacterSummaryJsonProvider = pluginInterface.GetIpcProvider<string>(IpcContractInfo.GetCharacterSummaryJson);
+        getAccountCharacterListJsonProvider = pluginInterface.GetIpcProvider<string>(IpcContractInfo.GetAccountCharacterListJson);
+        getLastSnapshotResultJsonProvider = pluginInterface.GetIpcProvider<string>(IpcContractInfo.GetLastSnapshotResultJson);
+        searchItemsProvider = pluginInterface.GetIpcProvider<string, string>(IpcContractInfo.SearchItems);
+        getMatchingCharactersForItemsProvider = pluginInterface.GetIpcProvider<string, string>(IpcContractInfo.GetMatchingCharactersForItems);
+        searchCurrentCharacterItemsJsonProvider = pluginInterface.GetIpcProvider<string, string>(IpcContractInfo.SearchCurrentCharacterItemsJson);
     }
 
-    /// <summary>
-    /// Wire up the IPC handlers. Called after MainWindow is ready so the callbacks have valid targets.
-    /// </summary>
-    public void Initialize(
-        Action onSave,
-        Action onRefresh,
-        Func<bool> isReady,
-        Func<string> getDbPath,
-        string version,
-        Func<string> getCharacterName,
-        Func<int> getGil,
-        Func<long> getRetainerGil,
-        Func<string> getFcInfo,
-        Func<string> getFcName,
-        Func<string> getFcTag,
-        Func<int> getFcPoints,
-        Func<string> getPlotInfo,
-        Func<string> getPersonalPlotInfo,
-        Func<string> getApartment,
-        Func<string> getCharacterSummaryJson,
-        Func<string> getAccountCharacterListJson,
-        Func<string> getLastSnapshotResultJson,
-        Func<string, string> searchItems,
-        Func<string, string> getMatchingCharactersForItems,
-        Func<string, string> searchCurrentCharacterItemsJson)
+    public void Initialize(IpcFacade facade)
     {
-        // Core actions
-        saveProvider.RegisterAction(() =>
+        lock (lifecycleGate)
         {
-            log.Information("[XA] IPC: Save requested by external plugin.");
-            onSave();
-        });
+            if (disposed || initialized || registrations.IsDisposed)
+                return;
 
-        refreshProvider.RegisterAction(() =>
-        {
-            log.Information("[XA] IPC: Refresh requested by external plugin.");
-            onRefresh();
-        });
+            try
+            {
+                saveProvider.RegisterAction(() => RunSafe(IpcContractInfo.Save, () =>
+                {
+                    log.Information("[XA] IPC: Save requested by external plugin.");
+                    facade.Save();
+                }));
+                registrations.Add(IpcContractInfo.Save, saveProvider.UnregisterAction);
+                refreshProvider.RegisterAction(() => RunSafe(IpcContractInfo.Refresh, () =>
+                {
+                    log.Information("[XA] IPC: Refresh requested by external plugin.");
+                    facade.Refresh();
+                }));
+                registrations.Add(IpcContractInfo.Refresh, refreshProvider.UnregisterAction);
 
-        // Core queries
-        isReadyProvider.RegisterFunc(() => isReady());
-        getDbPathProvider.RegisterFunc(() => getDbPath());
-        getVersionProvider.RegisterFunc(() => version);
-
-        // Data queries
-        getCharacterNameProvider.RegisterFunc(() => getCharacterName());
-        getGilProvider.RegisterFunc(() => getGil());
-        getRetainerGilProvider.RegisterFunc(() => getRetainerGil());
-        getFcInfoProvider.RegisterFunc(() => getFcInfo());
-        getFcNameProvider.RegisterFunc(() => getFcName());
-        getFcTagProvider.RegisterFunc(() => getFcTag());
-        getFcPointsProvider.RegisterFunc(() => getFcPoints());
-        getPlotInfoProvider.RegisterFunc(() => getPlotInfo());
-        getPersonalPlotInfoProvider.RegisterFunc(() => getPersonalPlotInfo());
-        getApartmentProvider.RegisterFunc(() => getApartment());
-        getCharacterSummaryJsonProvider.RegisterFunc(() => getCharacterSummaryJson());
-        getAccountCharacterListJsonProvider.RegisterFunc(() => getAccountCharacterListJson());
-        getLastSnapshotResultJsonProvider.RegisterFunc(() => getLastSnapshotResultJson());
-        searchItemsProvider.RegisterFunc((query) => searchItems(query));
-        getMatchingCharactersForItemsProvider.RegisterFunc((itemKeysPayload) => getMatchingCharactersForItems(itemKeysPayload));
-        searchCurrentCharacterItemsJsonProvider.RegisterFunc((requestJson) => searchCurrentCharacterItemsJson(requestJson));
-
-        log.Information($"[XA] IPC handlers initialized ({IpcContractInfo.ChannelCount} channels).");
+                Register(isReadyProvider, IpcContractInfo.IsReady, facade.IsReady, false);
+                Register(getDbPathProvider, IpcContractInfo.GetDbPath, facade.GetDbPath, string.Empty);
+                Register(getVersionProvider, IpcContractInfo.GetVersion, () => facade.Version, string.Empty);
+                Register(getCharacterNameProvider, IpcContractInfo.GetCharacterName, facade.GetCharacterName, string.Empty);
+                Register(getGilProvider, IpcContractInfo.GetGil, facade.GetGil, 0);
+                Register(getRetainerGilProvider, IpcContractInfo.GetRetainerGil, facade.GetRetainerGil, 0L);
+                Register(getFcInfoProvider, IpcContractInfo.GetFcInfo, facade.GetFcInfo, string.Empty);
+                Register(getFcNameProvider, IpcContractInfo.GetFcName, facade.GetFcName, string.Empty);
+                Register(getFcTagProvider, IpcContractInfo.GetFcTag, facade.GetFcTag, string.Empty);
+                Register(getFcPointsProvider, IpcContractInfo.GetFcPoints, facade.GetFcPoints, 0);
+                Register(getPlotInfoProvider, IpcContractInfo.GetPlotInfo, facade.GetPlotInfo, string.Empty);
+                Register(getPersonalPlotInfoProvider, IpcContractInfo.GetPersonalPlotInfo, facade.GetPersonalPlotInfo, string.Empty);
+                Register(getApartmentProvider, IpcContractInfo.GetApartment, facade.GetApartment, string.Empty);
+                Register(getCharacterSummaryJsonProvider, IpcContractInfo.GetCharacterSummaryJson, facade.GetCharacterSummaryJson, string.Empty);
+                Register(getAccountCharacterListJsonProvider, IpcContractInfo.GetAccountCharacterListJson, facade.GetAccountCharacterListJson, string.Empty);
+                Register(getLastSnapshotResultJsonProvider, IpcContractInfo.GetLastSnapshotResultJson, facade.GetLastSnapshotResultJson, string.Empty);
+                Register(searchItemsProvider, IpcContractInfo.SearchItems, facade.SearchItems, string.Empty);
+                Register(getMatchingCharactersForItemsProvider, IpcContractInfo.GetMatchingCharactersForItems, facade.GetMatchingCharactersForItems, string.Empty);
+                Register(searchCurrentCharacterItemsJsonProvider, IpcContractInfo.SearchCurrentCharacterItemsJson, facade.SearchCurrentCharacterItemsJson, string.Empty);
+                initialized = true;
+                log.Information($"[XA] IPC handlers initialized ({IpcContractInfo.ChannelCount} channels, contract v{IpcContractInfo.CurrentVersion}).");
+            }
+            catch (Exception ex)
+            {
+                log.Error(ex, "[XA] IPC initialization failed; partial registrations are being removed.");
+                registrations.Dispose(ReportCleanupFailure);
+            }
+        }
     }
 
     public void Dispose()
     {
-        saveProvider.UnregisterAction();
-        refreshProvider.UnregisterAction();
-        isReadyProvider.UnregisterFunc();
-        getDbPathProvider.UnregisterFunc();
-        getVersionProvider.UnregisterFunc();
-        getCharacterNameProvider.UnregisterFunc();
-        getGilProvider.UnregisterFunc();
-        getRetainerGilProvider.UnregisterFunc();
-        getFcInfoProvider.UnregisterFunc();
-        getFcNameProvider.UnregisterFunc();
-        getFcTagProvider.UnregisterFunc();
-        getFcPointsProvider.UnregisterFunc();
-        getPlotInfoProvider.UnregisterFunc();
-        getPersonalPlotInfoProvider.UnregisterFunc();
-        getApartmentProvider.UnregisterFunc();
-        getCharacterSummaryJsonProvider.UnregisterFunc();
-        getAccountCharacterListJsonProvider.UnregisterFunc();
-        getLastSnapshotResultJsonProvider.UnregisterFunc();
-        searchItemsProvider.UnregisterFunc();
-        getMatchingCharactersForItemsProvider.UnregisterFunc();
-        searchCurrentCharacterItemsJsonProvider.UnregisterFunc();
+        lock (lifecycleGate)
+        {
+            if (disposed)
+                return;
+            disposed = true;
+        }
 
+        registrations.Dispose(ReportCleanupFailure);
         log.Information("[XA] IPC provider disposed.");
     }
+
+    private void Register<T>(ICallGateProvider<T> provider, string channel, Func<T> function, T fallback)
+    {
+        provider.RegisterFunc(() => RunSafe(channel, function, fallback));
+        registrations.Add(channel, provider.UnregisterFunc);
+    }
+
+    private void Register<TArg, TResult>(
+        ICallGateProvider<TArg, TResult> provider,
+        string channel,
+        Func<TArg, TResult> function,
+        TResult fallback)
+    {
+        provider.RegisterFunc(argument => RunSafe(channel, () => function(argument), fallback));
+        registrations.Add(channel, provider.UnregisterFunc);
+    }
+
+    private void RunSafe(string channel, Action action)
+        => IpcInvocationPolicy.RunSafe(
+            channel,
+            () => framework.RunOnFrameworkThread(action).GetAwaiter().GetResult(),
+            ReportInvocationFailure);
+
+    private T RunSafe<T>(string channel, Func<T> function, T fallback)
+        => IpcInvocationPolicy.RunSafe(
+            channel,
+            () => framework.RunOnFrameworkThread(function).GetAwaiter().GetResult(),
+            fallback,
+            ReportInvocationFailure);
+
+    private void ReportInvocationFailure(string channel, Exception error)
+        => log.Error(error, $"[XA] IPC channel {channel} failed; returning its safe contract fallback.");
+
+    private void ReportCleanupFailure(string channel, Exception error)
+        => log.Warning(error, $"[XA] IPC channel {channel} could not be unregistered cleanly.");
 }

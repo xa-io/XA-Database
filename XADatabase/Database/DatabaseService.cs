@@ -1,10 +1,13 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
+using XADatabase.Core.Storage;
+using XADatabase.Core.Policies;
 using XADatabase.Data;
 using XADatabase.Models;
 
@@ -12,6 +15,9 @@ namespace XADatabase.Database;
 
 public sealed class DatabaseService : IDisposable
 {
+    private const int MaxDatabaseBackups = 5;
+    private static readonly Regex SafeIdentifier = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
+
     private static readonly string[] LegacyTables =
     {
         "retainer_listings",
@@ -40,31 +46,49 @@ public sealed class DatabaseService : IDisposable
     };
 
     private readonly string dbPath;
+    private readonly string connectionString;
+    private readonly object connectionGate = new();
     private SqliteConnection? connection;
     public DatabaseHealthCheckResult LastHealthCheck { get; private set; } = new();
+    public string SchemaInitializationError { get; private set; } = string.Empty;
 
     public DatabaseService(string pluginConfigDir)
     {
         Directory.CreateDirectory(pluginConfigDir);
         dbPath = Path.Combine(pluginConfigDir, "xa.db");
+        connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Pooling = false,
+        }.ToString();
     }
 
     public SqliteConnection GetConnection()
     {
-        if (connection == null)
+        lock (connectionGate)
         {
-            connection = new SqliteConnection($"Data Source={dbPath}");
-            connection.Open();
+            if (connection == null)
+            {
+                var created = new SqliteConnection(connectionString);
+                created.Open();
 
-            using var walCmd = connection.CreateCommand();
-            walCmd.CommandText = "PRAGMA journal_mode=WAL";
-            walCmd.ExecuteNonQuery();
+                using var pragmaCmd = created.CreateCommand();
+                pragmaCmd.CommandText = @"
+                    PRAGMA journal_mode = WAL;
+                    PRAGMA synchronous = NORMAL;
+                    PRAGMA busy_timeout = 3000;
+                    PRAGMA foreign_keys = ON;";
+                pragmaCmd.ExecuteNonQuery();
+
+                connection = created;
+            }
+            else if (connection.State != System.Data.ConnectionState.Open)
+            {
+                connection.Open();
+            }
+
+            return connection;
         }
-
-        if (connection.State != System.Data.ConnectionState.Open)
-            connection.Open();
-
-        return connection;
     }
 
     public DatabaseHealthCheckResult RunHealthCheck()
@@ -72,7 +96,7 @@ public sealed class DatabaseService : IDisposable
         var result = new DatabaseHealthCheckResult
         {
             DbPath = dbPath,
-            CheckedAtUtc = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"),
+            CheckedAtUtc = SnapshotTime.Format(DateTime.UtcNow),
         };
 
         if (ActiveTransaction != null)
@@ -96,23 +120,23 @@ public sealed class DatabaseService : IDisposable
 
             using (var integrityCmd = conn.CreateCommand())
             {
-                integrityCmd.CommandText = "PRAGMA quick_check(1)";
-                var integrity = integrityCmd.ExecuteScalar()?.ToString() ?? string.Empty;
-                result.IntegrityOk = string.Equals(integrity, "ok", StringComparison.OrdinalIgnoreCase);
+                integrityCmd.CommandText = "PRAGMA quick_check";
+                using var reader = integrityCmd.ExecuteReader();
+                var integrityLines = new List<string>();
+                while (reader.Read())
+                    integrityLines.Add(reader.GetString(0));
+
+                result.IntegrityOk = integrityLines.Count == 1
+                    && string.Equals(integrityLines[0], "ok", StringComparison.OrdinalIgnoreCase);
                 if (!result.IntegrityOk)
-                    result.Error = string.IsNullOrWhiteSpace(integrity) ? "quick_check returned an empty result." : integrity;
+                    result.Error = integrityLines.Count == 0
+                        ? "quick_check returned no rows."
+                        : string.Join("; ", integrityLines);
             }
 
-            using (var beginCmd = conn.CreateCommand())
+            using (var probe = conn.BeginTransaction(deferred: false))
             {
-                beginCmd.CommandText = "BEGIN IMMEDIATE";
-                beginCmd.ExecuteNonQuery();
-            }
-
-            using (var rollbackCmd = conn.CreateCommand())
-            {
-                rollbackCmd.CommandText = "ROLLBACK";
-                rollbackCmd.ExecuteNonQuery();
+                probe.Rollback();
             }
 
             result.WriteOk = true;
@@ -123,17 +147,6 @@ public sealed class DatabaseService : IDisposable
         }
         catch (Exception ex)
         {
-            try
-            {
-                var conn = GetConnection();
-                using var rollbackCmd = conn.CreateCommand();
-                rollbackCmd.CommandText = "ROLLBACK";
-                rollbackCmd.ExecuteNonQuery();
-            }
-            catch
-            {
-            }
-
             result.Error = ex.Message;
             result.Success = false;
             result.Summary = $"Database health check failed: {ex.Message}";
@@ -151,60 +164,79 @@ public sealed class DatabaseService : IDisposable
 
     public void InitializeSchema()
     {
+        try
+        {
+            InitializeSchemaInternal();
+            SchemaInitializationError = string.Empty;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"[XA] Failed to initialize database schema: {ex}");
+            SchemaInitializationError = ex.Message;
+        }
+    }
+
+    private void InitializeSchemaInternal()
+    {
         var conn = GetConnection();
+
+        // This repair must run before the current-version early return so databases
+        // affected by the v16-to-v17 index rename recover on their next load.
+        EnsureIndexes(conn);
+
         var currentVersion = GetSchemaVersion();
         var needsXaUpgrade = NeedsXaCharactersUpgrade();
         var needsRegionUpgrade = TableExists("xa_characters") && !ColumnExists("xa_characters", "region");
         var needsSharedEstatesUpgrade = TableExists("xa_characters") && !ColumnExists("xa_characters", "shared_estates");
-        var needsLegacyCleanup = GetXaCharacterCount() > 0 && HasLegacyTables();
         var needsRetainerGilRepair = TableExists("xa_characters") && HasNegativeRetainerGilRows();
+        var needsFreeCompanyIdRecovery = currentVersion < 21 && TableExists("xa_characters");
 
-        if (currentVersion >= Schema.CurrentVersion && !needsXaUpgrade && !needsRegionUpgrade && !needsSharedEstatesUpgrade && !needsLegacyCleanup && !needsRetainerGilRepair)
+        if (currentVersion >= Schema.CurrentVersion && !needsXaUpgrade && !needsRegionUpgrade && !needsSharedEstatesUpgrade && !needsRetainerGilRepair)
         {
             Plugin.Log.Information($"[XA] Database schema is up to date (v{currentVersion}).");
             return;
         }
+
+        if (HasBackupWorthySchema(conn) && BackupDatabaseFile("pre-schema-migration") == null)
+            throw new InvalidOperationException("Schema migration was refused because a database backup could not be created.");
 
         using var transaction = conn.BeginTransaction();
         try
         {
             ExecuteSchemaStatements(conn, transaction);
 
-            if (currentVersion < 3 && TableExists("retainers"))
+            if (currentVersion < 3 && TableExists(conn, transaction, "retainers"))
             {
-                TryExecuteNonQuery(conn, transaction, "ALTER TABLE retainers ADD COLUMN venture_id INTEGER NOT NULL DEFAULT 0");
-                TryExecuteNonQuery(conn, transaction, "ALTER TABLE retainers ADD COLUMN venture_complete_unix INTEGER NOT NULL DEFAULT 0");
-                TryExecuteNonQuery(conn, transaction, "ALTER TABLE retainers ADD COLUMN venture_status TEXT NOT NULL DEFAULT ''");
-                TryExecuteNonQuery(conn, transaction, "ALTER TABLE retainers ADD COLUMN venture_eta TEXT NOT NULL DEFAULT ''");
+                AddColumnIfMissing(conn, transaction, "retainers", "venture_id", "INTEGER NOT NULL DEFAULT 0");
+                AddColumnIfMissing(conn, transaction, "retainers", "venture_complete_unix", "INTEGER NOT NULL DEFAULT 0");
+                AddColumnIfMissing(conn, transaction, "retainers", "venture_status", "TEXT NOT NULL DEFAULT ''");
+                AddColumnIfMissing(conn, transaction, "retainers", "venture_eta", "TEXT NOT NULL DEFAULT ''");
                 Plugin.Log.Information("[XA] Applied schema migration v2 → v3 (retainer venture columns)");
             }
 
-            if (currentVersion < 10 && TableExists("fc_members"))
+            if (currentVersion < 10 && TableExists(conn, transaction, "fc_members"))
             {
-                TryExecuteNonQuery(conn, transaction, "ALTER TABLE fc_members ADD COLUMN rank_name TEXT NOT NULL DEFAULT ''");
-                Plugin.Log.Information("[XA] Applied schema migration v7 → v8 (fc_members rank_name column)");
+                AddColumnIfMissing(conn, transaction, "fc_members", "rank_name", "TEXT NOT NULL DEFAULT ''");
+                Plugin.Log.Information($"[XA] Applied schema migration v{currentVersion} → v10 (fc_members.rank_name)");
             }
 
-            if (currentVersion < 12 && TableExists("voyages"))
+            if (currentVersion < 12 && TableExists(conn, transaction, "voyages"))
             {
-                TryExecuteNonQuery(conn, transaction, "ALTER TABLE voyages ADD COLUMN build_string TEXT NOT NULL DEFAULT ''");
+                AddColumnIfMissing(conn, transaction, "voyages", "build_string", "TEXT NOT NULL DEFAULT ''");
                 Plugin.Log.Information("[XA] Applied schema migration v11 → v12 (voyages build_string column)");
             }
 
-            if (currentVersion < 13 && TableExists("free_companies"))
+            if (currentVersion < 13 && TableExists(conn, transaction, "free_companies"))
             {
-                TryExecuteNonQuery(conn, transaction, "ALTER TABLE free_companies ADD COLUMN fc_points INTEGER NOT NULL DEFAULT 0");
-                TryExecuteNonQuery(conn, transaction, "ALTER TABLE free_companies ADD COLUMN estate TEXT NOT NULL DEFAULT ''");
+                AddColumnIfMissing(conn, transaction, "free_companies", "fc_points", "INTEGER NOT NULL DEFAULT 0");
+                AddColumnIfMissing(conn, transaction, "free_companies", "estate", "TEXT NOT NULL DEFAULT ''");
                 Plugin.Log.Information("[XA] Applied schema migration v12 → v13 (fc_points, estate columns)");
             }
 
-            if (currentVersion < 14)
-                Plugin.Log.Information("[XA] Applied schema migration v13 → v14 (msq_milestones table)");
-
-            if (currentVersion < 15 && TableExists("characters"))
+            if (currentVersion < 15 && TableExists(conn, transaction, "characters"))
             {
-                TryExecuteNonQuery(conn, transaction, "ALTER TABLE characters ADD COLUMN personal_estate TEXT NOT NULL DEFAULT ''");
-                TryExecuteNonQuery(conn, transaction, "ALTER TABLE characters ADD COLUMN apartment TEXT NOT NULL DEFAULT ''");
+                AddColumnIfMissing(conn, transaction, "characters", "personal_estate", "TEXT NOT NULL DEFAULT ''");
+                AddColumnIfMissing(conn, transaction, "characters", "apartment", "TEXT NOT NULL DEFAULT ''");
                 Plugin.Log.Information("[XA] Applied schema migration v14 → v15 (personal_estate, apartment columns)");
             }
 
@@ -226,31 +258,49 @@ public sealed class DatabaseService : IDisposable
             if (currentVersion < 19 || needsSharedEstatesUpgrade)
                 Plugin.Log.Information("[XA] Applied schema migration v18 → v19 (xa_characters shared_estates column)");
 
-            if (GetXaCharacterCount() > 0 && HasLegacyTables())
-                DropLegacyTablesInternal(conn, transaction);
-
             if (needsXaUpgrade || needsRetainerGilRepair)
                 RepairNegativeRetainerGilRows(conn, transaction);
 
+            if (needsFreeCompanyIdRecovery)
+            {
+                var recoveredRows = RecoverFreeCompanyIds(conn, transaction, out var clearedRows);
+                if (recoveredRows > 0)
+                    Plugin.Log.Information($"[XA] Recovered {recoveredRows} free-company identity value(s) from preserved snapshot data.");
+                if (clearedRows > 0)
+                    Plugin.Log.Warning($"[XA] Cleared {clearedRows} unrecoverable clamped fc_id sentinel value(s); the correct FC identity requires a future authoritative live snapshot.");
+                Plugin.Log.Information($"[XA] Applied schema migration v{currentVersion} → v21 (recover preserved FC identity values)");
+            }
+
+            EnsureIndexes(conn, transaction);
             UpsertSchemaVersion(conn, transaction);
 
             transaction.Commit();
             Plugin.Log.Information($"[XA] Database schema initialized to v{Schema.CurrentVersion} at {dbPath}");
         }
-        catch (Exception ex)
+        catch
         {
-            transaction.Rollback();
-            Plugin.Log.Error($"[XA] Failed to initialize database schema: {ex}");
+            try
+            {
+                transaction.Rollback();
+            }
+            catch
+            {
+                // The original migration exception is the actionable failure.
+            }
+
             throw;
         }
     }
 
-    public SqliteTransaction? ActiveTransaction { get; set; }
+    public SqliteTransaction? ActiveTransaction { get; private set; }
 
     public bool HasActiveTransaction => ActiveTransaction != null;
 
     public SqliteTransaction BeginTransaction()
     {
+        if (ActiveTransaction != null)
+            throw new InvalidOperationException("[XA] A database transaction is already active; nested transactions are not supported.");
+
         var tx = GetConnection().BeginTransaction();
         ActiveTransaction = tx;
         return tx;
@@ -258,59 +308,64 @@ public sealed class DatabaseService : IDisposable
 
     public void CommitTransaction()
     {
-        ActiveTransaction?.Commit();
+        var transaction = ActiveTransaction;
         ActiveTransaction = null;
+        if (transaction == null)
+            return;
+
+        try
+        {
+            transaction.Commit();
+        }
+        finally
+        {
+            transaction.Dispose();
+        }
     }
 
     public void RollbackTransaction()
     {
-        try { ActiveTransaction?.Rollback(); } catch { }
+        var transaction = ActiveTransaction;
         ActiveTransaction = null;
+        if (transaction == null)
+            return;
+
+        try
+        {
+            transaction.Rollback();
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Warning($"[XA] Transaction rollback failed: {ex.Message}");
+        }
+        finally
+        {
+            transaction.Dispose();
+        }
     }
 
     public int GetSchemaVersion()
     {
         var conn = GetConnection();
-        try
-        {
-            using var checkCmd = conn.CreateCommand();
-            checkCmd.CommandText = "SELECT version FROM schema_version LIMIT 1";
-            var result = checkCmd.ExecuteScalar();
-            if (result != null)
-                return Convert.ToInt32(result);
-        }
-        catch (SqliteException)
-        {
-        }
+        if (!TableExists(conn, null, "schema_version"))
+            return 0;
 
-        return 0;
+        using var checkCmd = conn.CreateCommand();
+        checkCmd.CommandText = "SELECT version FROM schema_version LIMIT 1";
+        var result = checkCmd.ExecuteScalar();
+        return result == null || result == DBNull.Value
+            ? 0
+            : Convert.ToInt32(result, CultureInfo.InvariantCulture);
     }
 
     public bool TableExists(string tableName)
     {
-        var conn = GetConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = @name LIMIT 1";
-        cmd.Parameters.AddWithValue("@name", tableName);
-        return cmd.ExecuteScalar() != null;
+        return TableExists(GetConnection(), ActiveTransaction, tableName);
     }
 
     public bool ColumnExists(string tableName, string columnName)
     {
-        if (!TableExists(tableName))
-            return false;
-
-        var conn = GetConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = $"PRAGMA table_info({tableName})";
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
-        {
-            if (string.Equals(reader["name"].ToString(), columnName, StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-
-        return false;
+        return ColumnExists(GetConnection(), ActiveTransaction, tableName, columnName);
     }
 
     public int GetLegacyCharacterCount()
@@ -366,14 +421,14 @@ public sealed class DatabaseService : IDisposable
         string trigger,
         string triggerDetail,
         bool importedFromLegacy,
-        string updatedUtc)
+        string updatedUtc,
+        SqliteTransaction? transaction = null)
     {
         var conn = GetConnection();
         var normalizedFcEstate = HousingPlotSizeData.ApplySizeSuffix(fcEstate);
         var normalizedHousing = XaCharacterSnapshotRepository.NormalizeHousingPayload(personalEstate, sharedEstates, apartment);
         using var cmd = conn.CreateCommand();
-        if (ActiveTransaction != null)
-            cmd.Transaction = ActiveTransaction;
+        cmd.Transaction = transaction ?? ActiveTransaction;
         cmd.CommandText = @"
             INSERT INTO xa_characters (
                 content_id,
@@ -517,79 +572,112 @@ public sealed class DatabaseService : IDisposable
                 trigger_detail = excluded.trigger_detail,
                 imported_from_legacy = excluded.imported_from_legacy,
                 updated_utc = excluded.updated_utc";
-        cmd.Parameters.AddWithValue("@cid", (long)contentId);
-        cmd.Parameters.AddWithValue("@character_name", characterName ?? string.Empty);
-        cmd.Parameters.AddWithValue("@world", world ?? string.Empty);
-        cmd.Parameters.AddWithValue("@datacenter", datacenter ?? string.Empty);
-        cmd.Parameters.AddWithValue("@region", region ?? string.Empty);
-        cmd.Parameters.AddWithValue("@fc_id", ToSqliteInteger(fcId));
-        cmd.Parameters.AddWithValue("@fc_name", fcName ?? string.Empty);
-        cmd.Parameters.AddWithValue("@fc_tag", fcTag ?? string.Empty);
-        cmd.Parameters.AddWithValue("@fc_points", fcPoints);
-        cmd.Parameters.AddWithValue("@fc_estate", normalizedFcEstate);
-        cmd.Parameters.AddWithValue("@personal_estate", normalizedHousing.PersonalEstate);
-        cmd.Parameters.AddWithValue("@shared_estates", normalizedHousing.SharedEstates);
-        cmd.Parameters.AddWithValue("@apartment", normalizedHousing.Apartment);
-        cmd.Parameters.AddWithValue("@gil", gil);
-        cmd.Parameters.AddWithValue("@retainer_gil", retainerGil);
-        cmd.Parameters.AddWithValue("@retainer_count", retainerCount);
-        cmd.Parameters.AddWithValue("@highest_job_level", highestJobLevel);
-        cmd.Parameters.AddWithValue("@retainer_ids_json", string.IsNullOrWhiteSpace(retainerIdsJson) ? "[]" : retainerIdsJson);
-        cmd.Parameters.AddWithValue("@inventory_summaries_json", sections.InventorySummariesJson);
-        cmd.Parameters.AddWithValue("@freshness_json", string.IsNullOrWhiteSpace(freshnessJson) ? "{}" : freshnessJson);
-        cmd.Parameters.AddWithValue("@character_json", sections.CharacterJson);
-        cmd.Parameters.AddWithValue("@free_company_json", sections.FreeCompanyJson);
-        cmd.Parameters.AddWithValue("@fc_members_json", sections.FcMembersJson);
-        cmd.Parameters.AddWithValue("@currencies_json", sections.CurrenciesJson);
-        cmd.Parameters.AddWithValue("@jobs_json", sections.JobsJson);
-        cmd.Parameters.AddWithValue("@inventory_json", sections.InventoryJson);
-        cmd.Parameters.AddWithValue("@saddlebag_json", sections.SaddlebagJson);
-        cmd.Parameters.AddWithValue("@crystals_json", sections.CrystalsJson);
-        cmd.Parameters.AddWithValue("@armoury_json", sections.ArmouryJson);
-        cmd.Parameters.AddWithValue("@equipped_json", sections.EquippedJson);
-        cmd.Parameters.AddWithValue("@items_json", sections.ItemsJson);
-        cmd.Parameters.AddWithValue("@retainers_json", sections.RetainersJson);
-        cmd.Parameters.AddWithValue("@listings_json", sections.ListingsJson);
-        cmd.Parameters.AddWithValue("@retainer_items_json", sections.RetainerItemsJson);
-        cmd.Parameters.AddWithValue("@collections_json", sections.CollectionsJson);
-        cmd.Parameters.AddWithValue("@active_quests_json", sections.ActiveQuestsJson);
-        cmd.Parameters.AddWithValue("@msq_milestones_json", sections.MsqMilestonesJson);
-        cmd.Parameters.AddWithValue("@squadron_json", sections.SquadronJson);
-        cmd.Parameters.AddWithValue("@voyages_json", sections.VoyagesJson);
-        cmd.Parameters.AddWithValue("@validation_json", sections.ValidationJson);
-        cmd.Parameters.AddWithValue("@snapshot_version", snapshotVersion);
-        cmd.Parameters.AddWithValue("@exported_utc", exportedUtc ?? string.Empty);
-        cmd.Parameters.AddWithValue("@trigger", trigger ?? string.Empty);
-        cmd.Parameters.AddWithValue("@trigger_detail", triggerDetail ?? string.Empty);
-        cmd.Parameters.AddWithValue("@imported_from_legacy", importedFromLegacy ? 1 : 0);
-        cmd.Parameters.AddWithValue("@updated_utc", updatedUtc ?? string.Empty);
+        AddId(cmd, "@cid", contentId);
+        AddText(cmd, "@character_name", characterName);
+        AddText(cmd, "@world", world);
+        AddText(cmd, "@datacenter", datacenter);
+        AddText(cmd, "@region", region);
+        AddId(cmd, "@fc_id", fcId);
+        AddText(cmd, "@fc_name", fcName);
+        AddText(cmd, "@fc_tag", fcTag);
+        AddInt(cmd, "@fc_points", fcPoints);
+        AddText(cmd, "@fc_estate", normalizedFcEstate);
+        AddText(cmd, "@personal_estate", normalizedHousing.PersonalEstate);
+        AddText(cmd, "@shared_estates", normalizedHousing.SharedEstates);
+        AddText(cmd, "@apartment", normalizedHousing.Apartment);
+        AddInt(cmd, "@gil", gil);
+        AddInt(cmd, "@retainer_gil", retainerGil);
+        AddInt(cmd, "@retainer_count", retainerCount);
+        AddInt(cmd, "@highest_job_level", highestJobLevel);
+        AddText(cmd, "@retainer_ids_json", string.IsNullOrWhiteSpace(retainerIdsJson) ? "[]" : retainerIdsJson);
+        AddText(cmd, "@inventory_summaries_json", sections.InventorySummariesJson);
+        AddText(cmd, "@freshness_json", string.IsNullOrWhiteSpace(freshnessJson) ? "{}" : freshnessJson);
+        AddText(cmd, "@character_json", sections.CharacterJson);
+        AddText(cmd, "@free_company_json", sections.FreeCompanyJson);
+        AddText(cmd, "@fc_members_json", sections.FcMembersJson);
+        AddText(cmd, "@currencies_json", sections.CurrenciesJson);
+        AddText(cmd, "@jobs_json", sections.JobsJson);
+        AddText(cmd, "@inventory_json", sections.InventoryJson);
+        AddText(cmd, "@saddlebag_json", sections.SaddlebagJson);
+        AddText(cmd, "@crystals_json", sections.CrystalsJson);
+        AddText(cmd, "@armoury_json", sections.ArmouryJson);
+        AddText(cmd, "@equipped_json", sections.EquippedJson);
+        AddText(cmd, "@items_json", sections.ItemsJson);
+        AddText(cmd, "@retainers_json", sections.RetainersJson);
+        AddText(cmd, "@listings_json", sections.ListingsJson);
+        AddText(cmd, "@retainer_items_json", sections.RetainerItemsJson);
+        AddText(cmd, "@collections_json", sections.CollectionsJson);
+        AddText(cmd, "@active_quests_json", sections.ActiveQuestsJson);
+        AddText(cmd, "@msq_milestones_json", sections.MsqMilestonesJson);
+        AddText(cmd, "@squadron_json", sections.SquadronJson);
+        AddText(cmd, "@voyages_json", sections.VoyagesJson);
+        AddText(cmd, "@validation_json", sections.ValidationJson);
+        AddInt(cmd, "@snapshot_version", snapshotVersion);
+        AddText(cmd, "@exported_utc", exportedUtc);
+        AddText(cmd, "@trigger", trigger);
+        AddText(cmd, "@trigger_detail", triggerDetail);
+        AddInt(cmd, "@imported_from_legacy", importedFromLegacy ? 1 : 0);
+        AddText(cmd, "@updated_utc", updatedUtc);
         cmd.ExecuteNonQuery();
     }
 
-    public void DropLegacyTables()
+    public bool TryDropLegacyTablesAfterImport(string backupPath, out string reason)
     {
+        reason = string.Empty;
         var conn = GetConnection();
-        if (ActiveTransaction != null)
+
+        if (!HasLegacyTables())
+            return true;
+
+        if (ActiveTransaction == null)
         {
-            DropLegacyTablesInternal(conn, ActiveTransaction);
-            return;
+            reason = "Refusing to drop legacy tables outside the explicit import transaction.";
+            Plugin.Log.Warning($"[XA] {reason}");
+            return false;
         }
 
-        using var transaction = conn.BeginTransaction();
-        try
+        if (string.IsNullOrWhiteSpace(backupPath) || !File.Exists(backupPath))
         {
-            DropLegacyTablesInternal(conn, transaction);
-            transaction.Commit();
+            reason = "Refusing to drop legacy tables because the pre-import backup is missing.";
+            Plugin.Log.Warning($"[XA] {reason}");
+            return false;
         }
-        catch
+
+        if (TableExists(conn, ActiveTransaction, "characters")
+            && !ColumnExists(conn, ActiveTransaction, "characters", "content_id"))
         {
-            transaction.Rollback();
-            throw;
+            reason = "Refusing to drop legacy tables because characters.content_id is unavailable for the completeness proof.";
+            Plugin.Log.Warning($"[XA] {reason}");
+            return false;
         }
+
+        if (!TableExists(conn, ActiveTransaction, "xa_characters")
+            || !ColumnExists(conn, ActiveTransaction, "xa_characters", "content_id"))
+        {
+            reason = "Refusing to drop legacy tables because xa_characters.content_id is unavailable for the completeness proof.";
+            Plugin.Log.Warning($"[XA] {reason}");
+            return false;
+        }
+
+        var legacyIds = GetContentIds(conn, ActiveTransaction, "characters");
+        var migratedIds = GetContentIds(conn, ActiveTransaction, "xa_characters");
+        if (!LegacyDropProof.CanDrop(legacyIds, migratedIds, true, true, out var missing))
+        {
+            reason = $"Refusing to drop legacy tables: {missing.Count} legacy character(s) are not present in xa_characters.";
+            Plugin.Log.Warning($"[XA] {reason}");
+            return false;
+        }
+
+        DropLegacyTablesInternal(conn, ActiveTransaction);
+        return true;
     }
 
     public void DeleteCharacter(ulong contentId)
     {
+        var backupPath = BackupDatabaseFile("pre-delete-character");
+        if (backupPath == null)
+            throw new InvalidOperationException("Character deletion was refused because a database backup could not be created.");
+
         var conn = GetConnection();
         if (ActiveTransaction != null)
         {
@@ -612,19 +700,21 @@ public sealed class DatabaseService : IDisposable
 
     public void ClearAllCharacterData()
     {
+        var backupPath = BackupDatabaseFile("pre-clear-all");
+        if (backupPath == null)
+            throw new InvalidOperationException("Clear-all was refused because a database backup could not be created.");
+
         var conn = GetConnection();
+        if (ActiveTransaction != null)
+        {
+            ClearAllCharacterDataInternal(conn, ActiveTransaction);
+            return;
+        }
+
         using var transaction = conn.BeginTransaction();
         try
         {
-            if (TableExists("xa_characters"))
-            {
-                using var deleteCmd = conn.CreateCommand();
-                deleteCmd.Transaction = transaction;
-                deleteCmd.CommandText = "DELETE FROM xa_characters";
-                deleteCmd.ExecuteNonQuery();
-            }
-
-            DropLegacyTablesInternal(conn, transaction);
+            ClearAllCharacterDataInternal(conn, transaction);
             transaction.Commit();
         }
         catch
@@ -637,12 +727,64 @@ public sealed class DatabaseService : IDisposable
     public string GetDbPath() => dbPath;
     public string GetDbDirectory() => Path.GetDirectoryName(dbPath) ?? ".";
 
-    public bool CheckpointWal(string mode = "PASSIVE", string reason = "")
+    public string? BackupDatabaseFile(string reason)
+    {
+        try
+        {
+            if (!File.Exists(dbPath))
+            {
+                Plugin.Log.Warning($"[XA] Database backup skipped because the source file does not exist: {dbPath}");
+                return null;
+            }
+
+            var source = GetConnection();
+            var backupDirectory = Path.GetDirectoryName(dbPath) ?? ".";
+            var safeReason = SanitizeBackupReason(reason);
+            var timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd_HH-mm-ss", CultureInfo.InvariantCulture);
+            var backupPath = Path.Combine(backupDirectory, $"xa.db.{timestamp}.{safeReason}.bak");
+            var suffix = 1;
+            while (File.Exists(backupPath))
+            {
+                backupPath = Path.Combine(backupDirectory, $"xa.db.{timestamp}.{safeReason}.{suffix}.bak");
+                suffix++;
+            }
+
+            var destinationConnectionString = new SqliteConnectionStringBuilder
+            {
+                DataSource = backupPath,
+                Mode = SqliteOpenMode.ReadWriteCreate,
+                Pooling = false,
+            }.ToString();
+
+            using (var destination = new SqliteConnection(destinationConnectionString))
+            {
+                destination.Open();
+                source.BackupDatabase(destination);
+
+                using var verifyCmd = destination.CreateCommand();
+                verifyCmd.CommandText = "PRAGMA quick_check(1)";
+                var verification = verifyCmd.ExecuteScalar()?.ToString() ?? string.Empty;
+                if (!string.Equals(verification, "ok", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException($"Backup verification returned '{verification}'.");
+            }
+
+            PruneDatabaseBackups(backupDirectory);
+            Plugin.Log.Information($"[XA] Database backup created ({reason}): {backupPath}");
+            return backupPath;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Error($"[XA] Database backup failed ({reason}): {ex}");
+            return null;
+        }
+    }
+
+    public WalCheckpointOutcome CheckpointWal(string mode = "PASSIVE", string reason = "")
     {
         if (HasActiveTransaction)
         {
             Plugin.Log.Warning("[XA] WAL checkpoint skipped because a transaction is still active.");
-            return false;
+            return WalCheckpointOutcome.SkippedTransactionActive;
         }
 
         try
@@ -664,31 +806,46 @@ public sealed class DatabaseService : IDisposable
             }
 
             var reasonSuffix = string.IsNullOrWhiteSpace(reason) ? string.Empty : $" ({reason})";
-            if (busy == 0)
+            if (busy == 0 && checkpointedFrames >= logFrames)
             {
                 Plugin.Log.Information($"[XA] WAL checkpoint {normalizedMode} completed{reasonSuffix}. Frames checkpointed: {checkpointedFrames}/{logFrames}.");
-                return true;
+                return WalCheckpointOutcome.Merged;
             }
 
-            Plugin.Log.Warning($"[XA] WAL checkpoint {normalizedMode} reported busy={busy}{reasonSuffix}. Frames checkpointed: {checkpointedFrames}/{logFrames}.");
-            return false;
+            if (busy != 0)
+            {
+                Plugin.Log.Warning($"[XA] WAL checkpoint {normalizedMode} was blocked (busy={busy}){reasonSuffix}. Frames checkpointed: {checkpointedFrames}/{logFrames}.");
+                return WalCheckpointOutcome.Blocked;
+            }
+
+            Plugin.Log.Warning($"[XA] WAL checkpoint {normalizedMode} was partial{reasonSuffix}: {checkpointedFrames}/{logFrames} frames merged; the WAL could not be fully checkpointed.");
+            return WalCheckpointOutcome.Partial;
         }
         catch (Exception ex)
         {
             var reasonSuffix = string.IsNullOrWhiteSpace(reason) ? string.Empty : $" ({reason})";
             Plugin.Log.Error($"[XA] WAL checkpoint error{reasonSuffix}: {ex.Message}");
-            return false;
+            return WalCheckpointOutcome.Failed;
         }
     }
 
     public void Dispose()
     {
-        if (connection?.State == System.Data.ConnectionState.Open)
-            CheckpointWal("TRUNCATE", "dispose");
+        RollbackTransaction();
 
-        connection?.Close();
-        connection?.Dispose();
-        connection = null;
+        lock (connectionGate)
+        {
+            if (connection == null)
+                return;
+
+            if (connection.State == System.Data.ConnectionState.Open)
+                CheckpointWal("TRUNCATE", "dispose");
+
+            connection.Close();
+            connection.Dispose();
+            SqliteConnection.ClearPool(connection);
+            connection = null;
+        }
     }
 
     private static string NormalizeWalCheckpointMode(string mode)
@@ -716,14 +873,134 @@ public sealed class DatabaseService : IDisposable
         cmd.ExecuteNonQuery();
     }
 
-    private void TryExecuteNonQuery(SqliteConnection conn, SqliteTransaction transaction, string sql)
+    private static bool TableExists(SqliteConnection conn, SqliteTransaction? transaction, string tableName)
     {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = @name LIMIT 1";
+        cmd.Parameters.AddTypedValue("@name", tableName);
+        return cmd.ExecuteScalar() != null;
+    }
+
+    private static bool ColumnExists(
+        SqliteConnection conn,
+        SqliteTransaction? transaction,
+        string tableName,
+        string columnName)
+    {
+        if (!TableExists(conn, transaction, tableName))
+            return false;
+
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = $"PRAGMA table_info({Ident(tableName)})";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            if (string.Equals(reader["name"].ToString(), columnName, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private void AddColumnIfMissing(
+        SqliteConnection conn,
+        SqliteTransaction transaction,
+        string tableName,
+        string columnName,
+        string definition)
+    {
+        if (ColumnExists(conn, transaction, tableName, columnName))
+            return;
+
         try
         {
-            ExecuteNonQuery(conn, transaction, sql);
+            ExecuteNonQuery(conn, transaction, $"ALTER TABLE {Ident(tableName)} ADD COLUMN {Ident(columnName)} {definition}");
         }
-        catch (SqliteException)
+        catch (SqliteException ex) when (
+            SchemaMigrationPolicy.IsDuplicateColumnError(ex.SqliteErrorCode, ex.Message))
         {
+            // A duplicate is the only safe idempotency race. Every other SQLite
+            // error must roll back so the schema version is not advanced.
+        }
+    }
+
+    private void EnsureIndexes(SqliteConnection conn, SqliteTransaction? transaction = null)
+    {
+        if (!TableExists(conn, transaction, "xa_characters")
+            || !ColumnExists(conn, transaction, "xa_characters", "updated_utc"))
+            return;
+
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = @"CREATE INDEX IF NOT EXISTS idx_xa_characters_updated_utc
+            ON xa_characters(updated_utc)";
+        cmd.ExecuteNonQuery();
+    }
+
+    private static bool HasBackupWorthySchema(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"SELECT 1
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name NOT LIKE 'sqlite_%'
+              AND name <> 'schema_version'
+            LIMIT 1";
+        return cmd.ExecuteScalar() != null;
+    }
+
+    private static HashSet<long> GetContentIds(
+        SqliteConnection conn,
+        SqliteTransaction transaction,
+        string tableName)
+    {
+        var ids = new HashSet<long>();
+        if (!TableExists(conn, transaction, tableName)
+            || !ColumnExists(conn, transaction, tableName, "content_id"))
+            return ids;
+
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = $"SELECT DISTINCT content_id FROM {Ident(tableName)} WHERE content_id IS NOT NULL";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            ids.Add(Convert.ToInt64(reader[0], CultureInfo.InvariantCulture));
+
+        return ids;
+    }
+
+    private static string SanitizeBackupReason(string reason)
+    {
+        var source = string.IsNullOrWhiteSpace(reason) ? "manual" : reason.Trim();
+        var safe = new string(source
+            .Select(static character => char.IsLetterOrDigit(character) || character is '-' or '_'
+                ? character
+                : '-')
+            .ToArray());
+        return string.IsNullOrWhiteSpace(safe) ? "manual" : safe;
+    }
+
+    private static void PruneDatabaseBackups(string backupDirectory)
+    {
+        var expectedDirectory = Path.GetFullPath(backupDirectory)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var backups = Directory
+            .EnumerateFiles(expectedDirectory, "xa.db.*.bak", SearchOption.TopDirectoryOnly)
+            .Select(static path => new FileInfo(path))
+            .OrderByDescending(static file => file.LastWriteTimeUtc)
+            .ThenByDescending(static file => file.Name, StringComparer.Ordinal)
+            .ToList();
+
+        foreach (var staleBackup in backups.Skip(MaxDatabaseBackups))
+        {
+            var actualDirectory = Path.GetFullPath(staleBackup.DirectoryName ?? string.Empty)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (!string.Equals(actualDirectory, expectedDirectory, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"Refusing to prune a database backup outside {expectedDirectory}.");
+
+            staleBackup.Delete();
         }
     }
 
@@ -734,7 +1011,7 @@ public sealed class DatabaseService : IDisposable
         versionCmd.CommandText = @"
             DELETE FROM schema_version;
             INSERT INTO schema_version (version) VALUES (@version)";
-        versionCmd.Parameters.AddWithValue("@version", Schema.CurrentVersion);
+        versionCmd.Parameters.AddTypedValue("@version", Schema.CurrentVersion);
         versionCmd.ExecuteNonQuery();
     }
 
@@ -782,23 +1059,23 @@ public sealed class DatabaseService : IDisposable
 
     private long GetCharacterFreeCompanyId(SqliteConnection conn, SqliteTransaction transaction, long contentId)
     {
-        if (TableExists("xa_characters"))
+        if (TableExists(conn, transaction, "xa_characters"))
         {
             using var xaCmd = conn.CreateCommand();
             xaCmd.Transaction = transaction;
             xaCmd.CommandText = "SELECT fc_id FROM xa_characters WHERE content_id = @cid LIMIT 1";
-            xaCmd.Parameters.AddWithValue("@cid", contentId);
+            xaCmd.Parameters.AddTypedValue("@cid", contentId);
             var xaResult = xaCmd.ExecuteScalar();
             if (xaResult != null && xaResult != DBNull.Value)
                 return Convert.ToInt64(xaResult);
         }
 
-        if (TableExists("free_companies"))
+        if (TableExists(conn, transaction, "free_companies"))
         {
             using var legacyCmd = conn.CreateCommand();
             legacyCmd.Transaction = transaction;
             legacyCmd.CommandText = "SELECT fc_id FROM free_companies WHERE content_id = @cid LIMIT 1";
-            legacyCmd.Parameters.AddWithValue("@cid", contentId);
+            legacyCmd.Parameters.AddTypedValue("@cid", contentId);
             var legacyResult = legacyCmd.ExecuteScalar();
             if (legacyResult != null && legacyResult != DBNull.Value)
                 return Convert.ToInt64(legacyResult);
@@ -809,7 +1086,7 @@ public sealed class DatabaseService : IDisposable
 
     private long GetReplacementFreeCompanyOwner(SqliteConnection conn, SqliteTransaction transaction, long deletedContentId, long fcId)
     {
-        if (fcId == 0 || !TableExists("xa_characters"))
+        if (fcId == 0 || !TableExists(conn, transaction, "xa_characters"))
             return 0;
 
         using var cmd = conn.CreateCommand();
@@ -820,8 +1097,8 @@ public sealed class DatabaseService : IDisposable
             WHERE fc_id = @fcid AND content_id != @cid
             ORDER BY updated_utc DESC, content_id ASC
             LIMIT 1";
-        cmd.Parameters.AddWithValue("@fcid", fcId);
-        cmd.Parameters.AddWithValue("@cid", deletedContentId);
+        cmd.Parameters.AddTypedValue("@fcid", fcId);
+        cmd.Parameters.AddTypedValue("@cid", deletedContentId);
         var result = cmd.ExecuteScalar();
         return result != null && result != DBNull.Value ? Convert.ToInt64(result) : 0;
     }
@@ -829,13 +1106,13 @@ public sealed class DatabaseService : IDisposable
     private List<long> GetCharacterRetainerIds(SqliteConnection conn, SqliteTransaction transaction, long contentId)
     {
         var retainerIds = new List<long>();
-        if (!TableExists("retainers"))
+        if (!TableExists(conn, transaction, "retainers"))
             return retainerIds;
 
         using var cmd = conn.CreateCommand();
         cmd.Transaction = transaction;
         cmd.CommandText = "SELECT retainer_id FROM retainers WHERE content_id = @cid";
-        cmd.Parameters.AddWithValue("@cid", contentId);
+        cmd.Parameters.AddTypedValue("@cid", contentId);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
             retainerIds.Add((long)reader["retainer_id"]);
@@ -850,26 +1127,26 @@ public sealed class DatabaseService : IDisposable
 
     private void DeleteRowsByColumnValue(SqliteConnection conn, SqliteTransaction transaction, string tableName, string columnName, long value)
     {
-        if (!TableExists(tableName))
+        if (!TableExists(conn, transaction, tableName))
             return;
 
         using var cmd = conn.CreateCommand();
         cmd.Transaction = transaction;
-        cmd.CommandText = $"DELETE FROM {tableName} WHERE {columnName} = @value";
-        cmd.Parameters.AddWithValue("@value", value);
+        cmd.CommandText = $"DELETE FROM {Ident(tableName)} WHERE {Ident(columnName)} = @value";
+        cmd.Parameters.AddTypedValue("@value", value);
         cmd.ExecuteNonQuery();
     }
 
     private void ReassignFreeCompanyOwner(SqliteConnection conn, SqliteTransaction transaction, long fcId, long contentId)
     {
-        if (!TableExists("free_companies"))
+        if (!TableExists(conn, transaction, "free_companies"))
             return;
 
         using var cmd = conn.CreateCommand();
         cmd.Transaction = transaction;
         cmd.CommandText = "UPDATE free_companies SET content_id = @cid WHERE fc_id = @fcid";
-        cmd.Parameters.AddWithValue("@cid", contentId);
-        cmd.Parameters.AddWithValue("@fcid", fcId);
+        cmd.Parameters.AddTypedValue("@cid", contentId);
+        cmd.Parameters.AddTypedValue("@fcid", fcId);
         cmd.ExecuteNonQuery();
     }
 
@@ -889,7 +1166,8 @@ public sealed class DatabaseService : IDisposable
 
     private void AddXaCharacterRegionColumn(SqliteConnection conn, SqliteTransaction transaction)
     {
-        if (!TableExists("xa_characters") || ColumnExists("xa_characters", "region"))
+        if (!TableExists(conn, transaction, "xa_characters")
+            || ColumnExists(conn, transaction, "xa_characters", "region"))
             return;
 
         ExecuteNonQuery(conn, transaction, "ALTER TABLE xa_characters ADD COLUMN region TEXT NOT NULL DEFAULT ''");
@@ -914,15 +1192,16 @@ public sealed class DatabaseService : IDisposable
             using var updateCmd = conn.CreateCommand();
             updateCmd.Transaction = transaction;
             updateCmd.CommandText = "UPDATE xa_characters SET region = @region WHERE content_id = @cid";
-            updateCmd.Parameters.AddWithValue("@cid", row.ContentId);
-            updateCmd.Parameters.AddWithValue("@region", row.Region);
+            updateCmd.Parameters.AddTypedValue("@cid", row.ContentId);
+            updateCmd.Parameters.AddTypedValue("@region", row.Region);
             updateCmd.ExecuteNonQuery();
         }
     }
 
     private void AddXaCharacterSharedEstatesColumn(SqliteConnection conn, SqliteTransaction transaction)
     {
-        if (!TableExists("xa_characters") || ColumnExists("xa_characters", "shared_estates"))
+        if (!TableExists(conn, transaction, "xa_characters")
+            || ColumnExists(conn, transaction, "xa_characters", "shared_estates"))
             return;
 
         ExecuteNonQuery(conn, transaction, "ALTER TABLE xa_characters ADD COLUMN shared_estates TEXT NOT NULL DEFAULT ''");
@@ -930,7 +1209,7 @@ public sealed class DatabaseService : IDisposable
 
     private bool HasNegativeRetainerGilRows()
     {
-        if (!TableExists("xa_characters"))
+        if (!TableExists("xa_characters") || !ColumnExists("xa_characters", "retainer_gil"))
             return false;
 
         var conn = GetConnection();
@@ -941,7 +1220,7 @@ public sealed class DatabaseService : IDisposable
 
     private void RepairNegativeRetainerGilRows(SqliteConnection conn, SqliteTransaction transaction)
     {
-        if (!TableExists("xa_characters"))
+        if (!TableExists(conn, transaction, "xa_characters"))
             return;
 
         var repairs = new List<(long ContentId, string CharacterName, string World, string Datacenter, string Region, string PersonalEstate, string SharedEstates, string Apartment, int Gil, long RetainerGil)>();
@@ -1013,9 +1292,9 @@ public sealed class DatabaseService : IDisposable
                 SET retainer_gil = @retainer_gil,
                     character_json = @character_json
                 WHERE content_id = @cid";
-            updateCmd.Parameters.AddWithValue("@cid", repair.ContentId);
-            updateCmd.Parameters.AddWithValue("@retainer_gil", repair.RetainerGil);
-            updateCmd.Parameters.AddWithValue("@character_json", characterJson);
+            updateCmd.Parameters.AddTypedValue("@cid", repair.ContentId);
+            updateCmd.Parameters.AddTypedValue("@retainer_gil", repair.RetainerGil);
+            updateCmd.Parameters.AddTypedValue("@character_json", characterJson);
             updateCmd.ExecuteNonQuery();
         }
 
@@ -1027,50 +1306,43 @@ public sealed class DatabaseService : IDisposable
 
     private void UpgradeXaCharactersTable(SqliteConnection conn, SqliteTransaction transaction)
     {
-        if (!TableExists("xa_characters") || !NeedsXaCharactersUpgrade())
+        if (!TableExists(conn, transaction, "xa_characters"))
             return;
 
+        // SQLite keeps index names when a table is renamed. Free the known name
+        // first so the rebuilt table receives its own updated_utc index.
+        ExecuteNonQuery(conn, transaction, "DROP INDEX IF EXISTS idx_xa_characters_updated_utc");
         ExecuteNonQuery(conn, transaction, "ALTER TABLE xa_characters RENAME TO xa_characters_v16_backup");
         ExecuteSchemaStatements(conn, transaction);
 
-        var legacyRows = new List<LegacyXaCharacterMigrationRow>();
-
-        using var selectCmd = conn.CreateCommand();
-        selectCmd.Transaction = transaction;
-        selectCmd.CommandText = "SELECT * FROM xa_characters_v16_backup";
-        using var reader = selectCmd.ExecuteReader();
-        while (reader.Read())
+        long sourceRowCount;
+        using (var countCmd = conn.CreateCommand())
         {
-            legacyRows.Add(new LegacyXaCharacterMigrationRow
-            {
-                ContentId = (ulong)(long)reader["content_id"],
-                CharacterName = reader["character_name"].ToString() ?? string.Empty,
-                World = reader["world"].ToString() ?? string.Empty,
-                Datacenter = reader["datacenter"].ToString() ?? string.Empty,
-                FcName = reader["fc_name"].ToString() ?? string.Empty,
-                FcTag = reader["fc_tag"].ToString() ?? string.Empty,
-                FcPoints = ReadSqliteInt32(reader, "fc_points"),
-                FcEstate = reader["fc_estate"].ToString() ?? string.Empty,
-                PersonalEstate = reader["personal_estate"].ToString() ?? string.Empty,
-                Apartment = reader["apartment"].ToString() ?? string.Empty,
-                Gil = ReadSqliteInt32(reader, "gil"),
-                RetainerGil = ReadSqliteInt64(reader, "retainer_gil"),
-                RetainerCount = ReadSqliteInt32(reader, "retainer_count"),
-                RetainerIdsJson = reader["retainer_ids_json"].ToString() ?? "[]",
-                ValidationJson = reader["validation_json"].ToString() ?? "{}",
-                FreshnessJson = reader["freshness_json"].ToString() ?? "{}",
-                SnapshotJson = reader["snapshot_json"].ToString() ?? "{}",
-                UpdatedUtc = reader["updated_utc"].ToString() ?? string.Empty,
-                Trigger = reader["trigger"].ToString() ?? string.Empty,
-                TriggerDetail = reader["trigger_detail"].ToString() ?? string.Empty,
-                ImportedFromLegacy = ReadSqliteInt32(reader, "imported_from_legacy") == 1,
-            });
+            countCmd.Transaction = transaction;
+            countCmd.CommandText = "SELECT COUNT(*) FROM xa_characters_v16_backup";
+            sourceRowCount = Convert.ToInt64(countCmd.ExecuteScalar() ?? 0, CultureInfo.InvariantCulture);
         }
 
-        reader.Close();
-
-        foreach (var legacyRow in legacyRows)
+        Plugin.Log.Information($"[XA] Streaming {sourceRowCount} xa_characters v16 row(s) into the current snapshot schema.");
+        long? lastSignedContentId = null;
+        while (true)
         {
+            LegacyXaCharacterMigrationRow legacyRow;
+            using (var rowCmd = conn.CreateCommand())
+            {
+                rowCmd.Transaction = transaction;
+                rowCmd.CommandText = lastSignedContentId.HasValue
+                    ? "SELECT * FROM xa_characters_v16_backup WHERE content_id > @after ORDER BY content_id LIMIT 1"
+                    : "SELECT * FROM xa_characters_v16_backup ORDER BY content_id LIMIT 1";
+                if (lastSignedContentId.HasValue)
+                    AddInt(rowCmd, "@after", lastSignedContentId.Value);
+                using var rowReader = rowCmd.ExecuteReader();
+                if (!rowReader.Read())
+                    break;
+                legacyRow = ReadLegacyMigrationRow(rowReader);
+            }
+            lastSignedContentId = unchecked((long)legacyRow.ContentId);
+
             var datacenter = XaCharacterSnapshotRepository.ResolveDatacenter(legacyRow.World, legacyRow.Datacenter);
             var region = XaCharacterSnapshotRepository.ResolveRegion(legacyRow.World);
             var trigger = string.IsNullOrWhiteSpace(legacyRow.Trigger)
@@ -1125,9 +1397,11 @@ public sealed class DatabaseService : IDisposable
                 trigger,
                 triggerDetail,
                 importedFromLegacy,
-                legacyRow.UpdatedUtc);
+                legacyRow.UpdatedUtc,
+                transaction);
         }
         ExecuteNonQuery(conn, transaction, "DROP TABLE IF EXISTS xa_characters_v16_backup");
+        EnsureIndexes(conn, transaction);
     }
 
     private void DropLegacyTablesInternal(SqliteConnection conn, SqliteTransaction transaction)
@@ -1135,7 +1409,79 @@ public sealed class DatabaseService : IDisposable
         ExecuteNonQuery(conn, transaction, "PRAGMA defer_foreign_keys = ON");
 
         foreach (var table in LegacyTables)
-            ExecuteNonQuery(conn, transaction, $"DROP TABLE IF EXISTS {table}");
+            ExecuteNonQuery(conn, transaction, $"DROP TABLE IF EXISTS {Ident(table)}");
+    }
+
+    private void ClearAllCharacterDataInternal(SqliteConnection conn, SqliteTransaction transaction)
+    {
+        if (TableExists(conn, transaction, "xa_characters"))
+        {
+            using var deleteCmd = conn.CreateCommand();
+            deleteCmd.Transaction = transaction;
+            deleteCmd.CommandText = "DELETE FROM xa_characters";
+            deleteCmd.ExecuteNonQuery();
+        }
+
+        DropLegacyTablesInternal(conn, transaction);
+    }
+
+    private static int RecoverFreeCompanyIds(
+        SqliteConnection conn,
+        SqliteTransaction transaction,
+        out int clearedRows)
+    {
+        const long clampedSentinel = long.MaxValue;
+        var candidates = new List<(long ContentId, long StoredFcId, long RecoveredFcId, bool ClearOnly)>();
+
+        using (var selectCmd = conn.CreateCommand())
+        {
+            selectCmd.Transaction = transaction;
+            selectCmd.CommandText = @"
+                SELECT content_id, fc_id, free_company_json
+                FROM xa_characters
+                WHERE fc_id = 0 OR fc_id = @clampedSentinel";
+            selectCmd.Parameters.Add("@clampedSentinel", SqliteType.Integer).Value = clampedSentinel;
+
+            using var reader = selectCmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var contentId = reader.GetInt64(0);
+                var storedFcId = reader.GetInt64(1);
+                var recoveredFcId = ReadFreeCompanyId(reader.GetString(2));
+                if (recoveredFcId != 0)
+                {
+                    var encodedFcId = SqliteIdentity.Encode(recoveredFcId);
+                    if (encodedFcId != storedFcId)
+                        candidates.Add((contentId, storedFcId, encodedFcId, false));
+                }
+                else if (storedFcId == clampedSentinel)
+                {
+                    candidates.Add((contentId, storedFcId, 0, true));
+                }
+            }
+        }
+
+        var recoveredRows = 0;
+        clearedRows = 0;
+        foreach (var candidate in candidates)
+        {
+            using var updateCmd = conn.CreateCommand();
+            updateCmd.Transaction = transaction;
+            updateCmd.CommandText = @"
+                UPDATE xa_characters
+                SET fc_id = @recoveredFcId
+                WHERE content_id = @contentId AND fc_id = @storedFcId";
+            updateCmd.Parameters.Add("@recoveredFcId", SqliteType.Integer).Value = candidate.RecoveredFcId;
+            updateCmd.Parameters.Add("@contentId", SqliteType.Integer).Value = candidate.ContentId;
+            updateCmd.Parameters.Add("@storedFcId", SqliteType.Integer).Value = candidate.StoredFcId;
+            var changedRows = updateCmd.ExecuteNonQuery();
+            if (candidate.ClearOnly)
+                clearedRows += changedRows;
+            else
+                recoveredRows += changedRows;
+        }
+
+        return recoveredRows;
     }
 
     private static ulong ReadFreeCompanyId(string freeCompanyJson)
@@ -1210,29 +1556,6 @@ public sealed class DatabaseService : IDisposable
         return fallback;
     }
 
-    private static long ReadLegacySnapshotInt64(string snapshotJson, string propertyName, long fallback)
-    {
-        if (string.IsNullOrWhiteSpace(snapshotJson))
-            return fallback;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(snapshotJson);
-            if (doc.RootElement.TryGetProperty(propertyName, out var value))
-            {
-                if (value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var number))
-                    return number;
-                if (value.ValueKind == JsonValueKind.String && long.TryParse(value.GetString(), out number))
-                    return number;
-            }
-        }
-        catch
-        {
-        }
-
-        return fallback;
-    }
-
     private static bool ReadLegacySnapshotBool(string snapshotJson, string propertyName, bool fallback)
     {
         if (string.IsNullOrWhiteSpace(snapshotJson))
@@ -1254,6 +1577,101 @@ public sealed class DatabaseService : IDisposable
         }
 
         return fallback;
+    }
+
+    private static string ReadOptionalText(
+        SqliteDataReader reader,
+        HashSet<string> columns,
+        string columnName,
+        string fallback)
+    {
+        if (!columns.Contains(columnName))
+            return fallback;
+
+        var value = reader[columnName];
+        return value == null || value == DBNull.Value
+            ? fallback
+            : value.ToString() ?? fallback;
+    }
+
+    private static void AddId(SqliteCommand command, string name, ulong value)
+    {
+        command.Parameters.Add(name, SqliteType.Integer).Value = SqliteIdentity.Encode(value);
+    }
+
+    private static void AddInt(SqliteCommand command, string name, long value)
+    {
+        command.Parameters.Add(name, SqliteType.Integer).Value = value;
+    }
+
+    private static void AddText(SqliteCommand command, string name, string? value)
+    {
+        command.Parameters.Add(name, SqliteType.Text).Value = value ?? string.Empty;
+    }
+
+    private static string Ident(string name)
+    {
+        if (!SafeIdentifier.IsMatch(name))
+            throw new ArgumentException($"Unsafe SQL identifier: '{name}'.", nameof(name));
+        return name;
+    }
+
+    private static LegacyXaCharacterMigrationRow ReadLegacyMigrationRow(SqliteDataReader reader)
+    {
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var index = 0; index < reader.FieldCount; index++)
+            columns.Add(reader.GetName(index));
+
+        var rawContentId = ReadSqliteInt64(reader, columns, "content_id", long.MinValue);
+        if (rawContentId == long.MinValue)
+            throw new InvalidDataException("The legacy xa_characters table has no readable content_id column.");
+
+        return new LegacyXaCharacterMigrationRow
+        {
+            ContentId = unchecked((ulong)rawContentId),
+            CharacterName = ReadOptionalText(reader, columns, "character_name", string.Empty),
+            World = ReadOptionalText(reader, columns, "world", string.Empty),
+            Datacenter = ReadOptionalText(reader, columns, "datacenter", string.Empty),
+            FcName = ReadOptionalText(reader, columns, "fc_name", string.Empty),
+            FcTag = ReadOptionalText(reader, columns, "fc_tag", string.Empty),
+            FcPoints = ReadSqliteInt32(reader, columns, "fc_points"),
+            FcEstate = ReadOptionalText(reader, columns, "fc_estate", string.Empty),
+            PersonalEstate = ReadOptionalText(reader, columns, "personal_estate", string.Empty),
+            Apartment = ReadOptionalText(reader, columns, "apartment", string.Empty),
+            Gil = ReadSqliteInt32(reader, columns, "gil"),
+            RetainerGil = ReadSqliteInt64(reader, columns, "retainer_gil"),
+            RetainerCount = ReadSqliteInt32(reader, columns, "retainer_count"),
+            RetainerIdsJson = ReadOptionalText(reader, columns, "retainer_ids_json", "[]"),
+            ValidationJson = ReadOptionalText(reader, columns, "validation_json", "{}"),
+            FreshnessJson = ReadOptionalText(reader, columns, "freshness_json", "{}"),
+            SnapshotJson = ReadOptionalText(reader, columns, "snapshot_json", "{}"),
+            UpdatedUtc = ReadOptionalText(reader, columns, "updated_utc", string.Empty),
+            Trigger = ReadOptionalText(reader, columns, "trigger", string.Empty),
+            TriggerDetail = ReadOptionalText(reader, columns, "trigger_detail", string.Empty),
+            ImportedFromLegacy = ReadSqliteInt32(reader, columns, "imported_from_legacy") == 1,
+        };
+    }
+
+    private static int ReadSqliteInt32(
+        SqliteDataReader reader,
+        HashSet<string> columns,
+        string columnName,
+        int fallback = 0)
+    {
+        return columns.Contains(columnName)
+            ? ReadSqliteInt32(reader, columnName, fallback)
+            : fallback;
+    }
+
+    private static long ReadSqliteInt64(
+        SqliteDataReader reader,
+        HashSet<string> columns,
+        string columnName,
+        long fallback = 0)
+    {
+        return columns.Contains(columnName)
+            ? ReadSqliteInt64(reader, columnName, fallback)
+            : fallback;
     }
 
     private static int ReadSqliteInt32(SqliteDataReader reader, string columnName, int fallback = 0)
@@ -1310,10 +1728,15 @@ public sealed class DatabaseService : IDisposable
         }
     }
 
-    private static long ToSqliteInteger(ulong value)
-    {
-        return value > long.MaxValue ? long.MaxValue : (long)value;
-    }
+}
+
+public enum WalCheckpointOutcome
+{
+    Merged,
+    Partial,
+    Blocked,
+    SkippedTransactionActive,
+    Failed,
 }
 
 internal sealed class LegacyXaCharacterMigrationRow

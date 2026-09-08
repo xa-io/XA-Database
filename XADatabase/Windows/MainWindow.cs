@@ -11,6 +11,10 @@ using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using Lumina.Excel.Sheets;
 using XADatabase.Collectors;
+using XADatabase.Core.Collection;
+using XADatabase.Core.Localization;
+using XADatabase.Core.Policies;
+using XADatabase.Core.Quality;
 using XADatabase.Database;
 using XADatabase.Models;
 using Dalamud.Game.Text;
@@ -51,7 +55,8 @@ public partial class MainWindow : Window, IDisposable
     private string cachedPersonalEstate = string.Empty;
     private string cachedSharedEstates = string.Empty;
     private string cachedApartment = string.Empty;
-    private ulong lastLiveContentId;
+    private ulong cacheOwnerContentId;
+    private string cacheOwnerCharacterName = string.Empty;
     public bool DataCollected { get; private set; }
     private bool charListQueried;
 
@@ -98,8 +103,10 @@ public partial class MainWindow : Window, IDisposable
     private bool refreshAndSaveQueued;
     private SnapshotTrigger queuedRefreshAndSaveTrigger = SnapshotTrigger.Manual;
     private string queuedRefreshAndSaveDetail = string.Empty;
+    private ulong queuedSaveContentId;
     private ulong lastPersistedSnapshotContentId;
     private XaCharacterSnapshotData? lastPersistedSnapshot;
+    private readonly Dictionary<string, SectionState> lastCollectorSectionStates = new(StringComparer.Ordinal);
 
     public MainWindow(Plugin plugin)
         : base("XA Database##MainWindow", ImGuiWindowFlags.None)
@@ -162,14 +169,20 @@ public partial class MainWindow : Window, IDisposable
     /// <summary>Returns current character name, or empty if not loaded.</summary>
     public string GetCharacterName()
     {
-        try { return Plugin.PlayerState.IsLoaded ? Plugin.PlayerState.CharacterName.ToString() : string.Empty; }
-        catch { return string.Empty; }
+        try
+        {
+            if (plugin.Services.PlayerState.IsLoaded)
+                return plugin.Services.PlayerState.CharacterName.ToString();
+        }
+        catch { }
+
+        return cacheOwnerCharacterName;
     }
 
     /// <summary>Returns current character's gil from cached currencies.</summary>
     public int GetGil()
     {
-        var gil = cachedCurrencies.Find(c => c.Name == "Gil");
+        var gil = cachedCurrencies.Find(c => CurrencyIdentity.IsGil(c.ItemId, c.Key, c.Name));
         return gil != null ? (int)gil.Amount : 0;
     }
 
@@ -213,10 +226,12 @@ public partial class MainWindow : Window, IDisposable
 
     private sealed class CurrencyDisplayEntry
     {
+        public string Key { get; init; } = string.Empty;
         public string Category { get; init; } = string.Empty;
         public string Name { get; init; } = string.Empty;
         public long Amount { get; init; }
         public int Cap { get; init; }
+        public bool IsGilLike { get; init; }
     }
 
     private List<CurrencyDisplayEntry> BuildCurrencyDisplayEntries()
@@ -224,31 +239,35 @@ public partial class MainWindow : Window, IDisposable
         var displayCurrencies = cachedCurrencies
             .Select(entry => new CurrencyDisplayEntry
             {
+                Key = CurrencyIdentity.ResolveKey(entry.ItemId, entry.Key, entry.Name),
                 Category = entry.Category,
                 Name = entry.Name,
                 Amount = entry.Amount,
                 Cap = entry.Cap,
+                IsGilLike = CurrencyIdentity.IsGil(entry.ItemId, entry.Key, entry.Name),
             })
             .ToList();
 
-        int FindCommonCurrencyIndex(string name)
+        int FindCommonCurrencyIndex(string key)
         {
             return displayCurrencies.FindIndex(entry =>
                 entry.Category.Equals("Common", StringComparison.OrdinalIgnoreCase)
-                && entry.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                && entry.Key.Equals(key, StringComparison.Ordinal));
         }
 
         if (cachedFc != null)
         {
             var fcChestEntry = new CurrencyDisplayEntry
             {
+                Key = "fc-chest",
                 Category = "Common",
                 Name = "FC Chest",
                 Amount = GetCurrentFcChestGil(),
                 Cap = 999_999_999,
+                IsGilLike = true,
             };
 
-            var gilIndex = FindCommonCurrencyIndex("Gil");
+            var gilIndex = FindCommonCurrencyIndex(CurrencyIdentity.GilItemKey);
             if (gilIndex >= 0)
                 displayCurrencies.Insert(gilIndex + 1, fcChestEntry);
             else
@@ -261,18 +280,20 @@ public partial class MainWindow : Window, IDisposable
 
         var retainerGilEntry = new CurrencyDisplayEntry
         {
+            Key = "retainer-gil",
             Category = "Common",
             Name = "Retainer Gil",
             Amount = retainerGil,
             Cap = 999_999_999,
+            IsGilLike = true,
         };
 
-        var fcChestIndex = FindCommonCurrencyIndex("FC Chest");
+        var fcChestIndex = FindCommonCurrencyIndex("fc-chest");
         if (fcChestIndex >= 0)
             displayCurrencies.Insert(fcChestIndex + 1, retainerGilEntry);
         else
         {
-            var gilIndex = FindCommonCurrencyIndex("Gil");
+            var gilIndex = FindCommonCurrencyIndex(CurrencyIdentity.GilItemKey);
             if (gilIndex >= 0)
                 displayCurrencies.Insert(gilIndex + 1, retainerGilEntry);
             else
@@ -305,7 +326,7 @@ public partial class MainWindow : Window, IDisposable
         if (!TryRestorePersistedFreeCompanyGil(currentContentId, out var sourceContentId))
             return;
 
-        Plugin.Log.Debug(
+        plugin.Services.Log.Debug(
             $"[XA] Restored FC chest gil {cachedFc.FcGil:N0} for {currentCharacterName} (cid={currentContentId}, sourceCid={sourceContentId}, fcId={cachedFc.FcId}).");
     }
 
@@ -346,7 +367,7 @@ public partial class MainWindow : Window, IDisposable
             return false;
 
         XaCharacterSnapshotData? bestSnapshot = null;
-        foreach (var snapshot in plugin.SnapshotRepo.GetAllSnapshots())
+        foreach (var snapshot in plugin.Snapshots.All().Values)
         {
             var snapshotFc = snapshot.FreeCompany;
             if (snapshotFc == null || snapshotFc.FcId != cachedFc.FcId)
@@ -357,7 +378,7 @@ public partial class MainWindow : Window, IDisposable
                 continue;
 
             if (bestSnapshot == null
-                || string.CompareOrdinal(snapshot.Row.UpdatedUtc, bestSnapshot.Row.UpdatedUtc) > 0
+                || !SnapshotTime.IsSameOrNewer(bestSnapshot.Row.UpdatedUtc, snapshot.Row.UpdatedUtc)
                 || (string.Equals(snapshot.Row.UpdatedUtc, bestSnapshot.Row.UpdatedUtc, StringComparison.Ordinal)
                     && snapshot.Row.ContentId == currentContentId))
             {
@@ -396,7 +417,7 @@ public partial class MainWindow : Window, IDisposable
     {
         try
         {
-            var contentId = viewingContentId ?? (Plugin.PlayerState.IsLoaded ? Plugin.PlayerState.ContentId : 0UL);
+            var contentId = viewingContentId ?? (plugin.Services.PlayerState.IsLoaded ? plugin.Services.PlayerState.ContentId : 0UL);
             var characterName = viewingContentId.HasValue
                 ? viewingCharName
                 : GetCharacterName();
@@ -426,7 +447,7 @@ public partial class MainWindow : Window, IDisposable
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] IPC GetCharacterSummaryJson error: {ex}");
+            plugin.Services.Log.Error($"[XA] IPC GetCharacterSummaryJson error: {ex}");
             return string.Empty;
         }
     }
@@ -436,9 +457,16 @@ public partial class MainWindow : Window, IDisposable
         var warnings = new List<string>();
         try
         {
-            var snapshots = plugin.SnapshotRepo.GetAllSnapshots();
-            var legacyRows = plugin.CharacterRepo.GetAllLegacy();
+            var snapshots = plugin.Snapshots.Roster()
+                .Where(snapshot => plugin.IsCharacterVisible(snapshot.ContentId))
+                .ToList();
+            var legacyRows = plugin.CharacterRepo.GetAllLegacy()
+                .Where(row => plugin.IsCharacterVisible(row.ContentId))
+                .ToList();
             var characters = BuildMergedAccountCharacterListRows(snapshots, legacyRows);
+
+            if (plugin.CharacterVisibility.IsFiltering)
+                warnings.Add("Honor AutoRetainer Exclusions is active; only registered, non-excluded characters are included.");
 
             if (snapshots.Count == 0 && legacyRows.Count == 0)
                 warnings.Add("No local XA Database character rows exist on this client.");
@@ -454,7 +482,7 @@ public partial class MainWindow : Window, IDisposable
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] IPC GetAccountCharacterListJson error: {ex}");
+            plugin.Services.Log.Error($"[XA] IPC GetAccountCharacterListJson error: {ex}");
             warnings.Add($"GetAccountCharacterListJson failed: {ex.Message}");
             return SerializeAccountCharacterListResponse(false, 0, 0, new List<AccountCharacterListIpcCharacter>(), warnings);
         }
@@ -486,7 +514,7 @@ public partial class MainWindow : Window, IDisposable
     }
 
     private List<AccountCharacterListIpcCharacter> BuildMergedAccountCharacterListRows(
-        IReadOnlyList<XaCharacterSnapshotData> snapshots,
+        IReadOnlyList<XaCharacterRosterData> snapshots,
         IReadOnlyList<CharacterRow> legacyRows)
     {
         var merged = new List<AccountCharacterListIpcCharacter>();
@@ -500,7 +528,7 @@ public partial class MainWindow : Window, IDisposable
             TryAddAccountCharacterListRow(merged, seenContentIds, seenCharacterKeys, BuildAccountCharacterListRow(legacyRow));
 
         return merged
-            .OrderByDescending(static row => row.LastSnapshotUtc, StringComparer.Ordinal)
+            .OrderByDescending(static row => ParseSnapshotSortUtc(row.LastSnapshotUtc))
             .ThenBy(static row => row.CharacterName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(static row => row.WorldName, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -529,7 +557,7 @@ public partial class MainWindow : Window, IDisposable
         rows.Add(row);
     }
 
-    private AccountCharacterListIpcCharacter BuildAccountCharacterListRow(XaCharacterSnapshotData snapshot)
+    private AccountCharacterListIpcCharacter BuildAccountCharacterListRow(XaCharacterRosterData snapshot)
     {
         var rowIdsByAbbreviation = GetClassJobRowIdsByAbbreviation();
         var jobRows = snapshot.Jobs
@@ -550,14 +578,14 @@ public partial class MainWindow : Window, IDisposable
 
         return new AccountCharacterListIpcCharacter
         {
-            ContentId = snapshot.Row.ContentId,
-            CharacterKey = BuildRosterCharacterKey(snapshot.Row.CharacterName, snapshot.Row.World),
-            CharacterName = snapshot.Row.CharacterName,
-            WorldName = snapshot.Row.World,
-            DataCenterName = snapshot.Row.Datacenter,
-            LastSnapshotUtc = snapshot.Row.UpdatedUtc,
-            SnapshotVersion = snapshot.Row.SnapshotVersion,
-            SnapshotQuality = ResolveCurrentCharacterItemsSnapshotQuality(snapshot.Row.ContentId, snapshot),
+            ContentId = snapshot.ContentId,
+            CharacterKey = BuildRosterCharacterKey(snapshot.CharacterName, snapshot.World),
+            CharacterName = snapshot.CharacterName,
+            WorldName = snapshot.World,
+            DataCenterName = snapshot.Datacenter,
+            LastSnapshotUtc = snapshot.UpdatedUtc,
+            SnapshotVersion = snapshot.SnapshotVersion,
+            SnapshotQuality = ResolvePersistedSnapshotQuality(snapshot.ContentId, snapshot.UpdatedUtc, snapshot.ParseErrors),
             Source = "xa_characters",
             JobLevels = jobRows
                 .Where(static job => job.JobId != 0)
@@ -599,8 +627,11 @@ public partial class MainWindow : Window, IDisposable
         return $"{name}@{world}";
     }
 
+    private static DateTime ParseSnapshotSortUtc(string value)
+        => SnapshotTime.TryParseUtc(value, out var parsedUtc) ? parsedUtc : DateTime.MinValue;
+
     private Dictionary<string, uint> GetClassJobRowIdsByAbbreviation()
-        => classJobRowIdsByAbbreviation ??= JobCollector.BuildAbbreviationRowIdMap(Plugin.DataManager);
+        => classJobRowIdsByAbbreviation ??= JobCollector.BuildAbbreviationRowIdMap(plugin.Services.DataManager);
 
     public string GetLastSnapshotResultJson()
     {
@@ -610,7 +641,7 @@ public partial class MainWindow : Window, IDisposable
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] IPC GetLastSnapshotResultJson error: {ex}");
+            plugin.Services.Log.Error($"[XA] IPC GetLastSnapshotResultJson error: {ex}");
             return string.Empty;
         }
     }
@@ -628,7 +659,7 @@ public partial class MainWindow : Window, IDisposable
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] IPC SearchItems error: {ex}");
+            plugin.Services.Log.Error($"[XA] IPC SearchItems error: {ex}");
             return string.Empty;
         }
     }
@@ -648,11 +679,14 @@ public partial class MainWindow : Window, IDisposable
                 return string.Empty;
 
             var matches = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var snapshot in plugin.SnapshotRepo.GetAllSnapshots())
+            foreach (var snapshot in plugin.Snapshots.ItemSections())
             {
+                if (!plugin.IsCharacterVisible(snapshot.ContentId))
+                    continue;
+
                 if (!SnapshotContainsAnyMatchingItem(snapshot, itemKeys))
                     continue;
-                matches.Add($"{snapshot.Row.CharacterName}@{snapshot.Row.World}");
+                matches.Add($"{snapshot.CharacterName}@{snapshot.World}");
             }
 
             return matches.Count == 0
@@ -661,7 +695,7 @@ public partial class MainWindow : Window, IDisposable
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] IPC GetMatchingCharactersForItems error: {ex}");
+            plugin.Services.Log.Error($"[XA] IPC GetMatchingCharactersForItems error: {ex}");
             return string.Empty;
         }
     }
@@ -700,8 +734,8 @@ public partial class MainWindow : Window, IDisposable
         if (unsupportedSources.Count > 0)
             warnings.Add($"Unsupported sources ignored: {string.Join(", ", unsupportedSources)}.");
 
-        var ready = Plugin.PlayerState.IsLoaded && Plugin.PlayerState.ContentId != 0;
-        var contentId = ready ? Plugin.PlayerState.ContentId : 0UL;
+        var ready = plugin.Services.PlayerState.IsLoaded && plugin.Services.PlayerState.ContentId != 0;
+        var contentId = ready ? plugin.Services.PlayerState.ContentId : 0UL;
         var characterName = ready ? GetCharacterName() : string.Empty;
         var world = ready ? ResolveCurrentHomeWorldName() : string.Empty;
 
@@ -719,25 +753,27 @@ public partial class MainWindow : Window, IDisposable
 
         try
         {
-            var snapshot = plugin.SnapshotRepo.GetSnapshot(contentId);
+            var snapshot = plugin.Snapshots.ItemSections().FirstOrDefault(candidate => candidate.ContentId == contentId);
             if (snapshot == null)
             {
                 warnings.Add("No saved snapshot exists for the current character.");
                 return SerializeCurrentCharacterItemsResponse(true, contentId, characterName, world, new List<CurrentCharacterItemIpcRow>(), warnings);
             }
 
-            if (!string.IsNullOrWhiteSpace(snapshot.Row.CharacterName))
-                characterName = snapshot.Row.CharacterName;
-            if (!string.IsNullOrWhiteSpace(snapshot.Row.World))
-                world = snapshot.Row.World;
+            if (!string.IsNullOrWhiteSpace(snapshot.CharacterName))
+                characterName = snapshot.CharacterName;
+            if (!string.IsNullOrWhiteSpace(snapshot.World))
+                world = snapshot.World;
 
-            var snapshotQuality = ResolveCurrentCharacterItemsSnapshotQuality(contentId, snapshot);
-            if (IsSnapshotUpdatedUtcStale(snapshot.Row.UpdatedUtc))
+            var snapshotQuality = ResolvePersistedSnapshotQuality(contentId, snapshot.UpdatedUtc, snapshot.ParseErrors);
+            if (IsSnapshotUpdatedUtcStale(snapshot.UpdatedUtc))
                 warnings.Add("Current-character snapshot is stale; retainer inventory may need a fresh save.");
+            if (snapshot.ParseErrors.Count > 0)
+                warnings.Add("Current-character snapshot contains one or more malformed persisted sections.");
 
             var normalizedRetainers = XaCharacterSnapshotRepository.NormalizeRetainerPayload(
                 snapshot.Retainers,
-                snapshot.Listings,
+                new List<RetainerListingEntry>(),
                 snapshot.RetainerItems,
                 contentId);
             if (normalizedRetainers.Retainers.Count == 0)
@@ -767,7 +803,7 @@ public partial class MainWindow : Window, IDisposable
                     ItemName = item.ItemName,
                     Quantity = item.Quantity,
                     IsHq = item.IsHq,
-                    LastSeenUtc = snapshot.Row.UpdatedUtc,
+                    LastSeenUtc = snapshot.UpdatedUtc,
                     SnapshotQuality = snapshotQuality,
                 });
             }
@@ -776,7 +812,7 @@ public partial class MainWindow : Window, IDisposable
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] IPC SearchCurrentCharacterItemsJson error: {ex}");
+            plugin.Services.Log.Error($"[XA] IPC SearchCurrentCharacterItemsJson error: {ex}");
             warnings.Add($"SearchCurrentCharacterItemsJson failed: {ex.Message}");
             return SerializeCurrentCharacterItemsResponse(true, contentId, characterName, world, new List<CurrentCharacterItemIpcRow>(), warnings);
         }
@@ -828,40 +864,36 @@ public partial class MainWindow : Window, IDisposable
         return JsonSerializer.Serialize(response, CurrentCharacterItemsJsonOptions);
     }
 
-    private string ResolveCurrentCharacterItemsSnapshotQuality(ulong contentId, XaCharacterSnapshotData snapshot)
+    private string ResolvePersistedSnapshotQuality(
+        ulong contentId,
+        string updatedUtc,
+        IReadOnlyDictionary<string, string> parseErrors)
     {
         if (lastSnapshotResult != null && lastSnapshotResult.ContentId == contentId)
             return string.IsNullOrWhiteSpace(lastSnapshotResult.Quality)
                 ? GetSnapshotQualityLabel(lastSnapshotResult)
                 : lastSnapshotResult.Quality;
 
-        if (IsSnapshotUpdatedUtcStale(snapshot.Row.UpdatedUtc))
-            return "Stale";
-
-        return string.IsNullOrWhiteSpace(snapshot.Row.UpdatedUtc) ? "No Snapshot" : "Persisted";
+        return SnapshotQualityResolver.ToLabel(SnapshotQualityResolver.ClassifyPersisted(
+            updatedUtc,
+            parseErrors.Count > 0,
+            DateTime.UtcNow,
+            SnapshotStaleThresholdMinutes));
     }
 
     private static bool IsSnapshotUpdatedUtcStale(string updatedUtc)
-    {
-        if (!DateTime.TryParse(updatedUtc, out var parsed))
-            return false;
+        => SnapshotQualityResolver.IsStale(updatedUtc, DateTime.UtcNow, SnapshotStaleThresholdMinutes);
 
-        var parsedUtc = parsed.Kind == DateTimeKind.Unspecified
-            ? DateTime.SpecifyKind(parsed, DateTimeKind.Utc)
-            : parsed.ToUniversalTime();
-        return (DateTime.UtcNow - parsedUtc).TotalMinutes >= SnapshotStaleThresholdMinutes;
-    }
-
-    private static string ResolveCurrentHomeWorldName()
+    private string ResolveCurrentHomeWorldName()
     {
-        try { return Plugin.PlayerState.HomeWorld.Value.Name.ToString(); }
+        try { return plugin.Services.PlayerState.HomeWorld.Value.Name.ToString(); }
         catch { }
 
-        try { return Plugin.ObjectTable.LocalPlayer?.HomeWorld.Value.Name.ToString() ?? string.Empty; }
+        try { return plugin.Services.ObjectTable.LocalPlayer?.HomeWorld.Value.Name.ToString() ?? string.Empty; }
         catch { return string.Empty; }
     }
 
-    private static bool SnapshotContainsAnyMatchingItem(XaCharacterSnapshotData snapshot, HashSet<string> itemKeys)
+    private static bool SnapshotContainsAnyMatchingItem(XaCharacterItemsData snapshot, HashSet<string> itemKeys)
     {
         foreach (var item in snapshot.AllItems)
         {
@@ -890,95 +922,92 @@ public partial class MainWindow : Window, IDisposable
     /// </summary>
     private void SeedFromDatabase()
     {
-        var playerState = Plugin.PlayerState;
+        var playerState = plugin.Services.PlayerState;
         if (!playerState.IsLoaded)
             return;
 
         try
         {
             var contentId = playerState.ContentId;
-            var snapshot = plugin.SnapshotRepo.GetSnapshot(contentId);
+            var snapshot = plugin.Snapshots.Get(contentId);
             if (snapshot != null)
-            {
                 ApplySnapshotToCache(snapshot);
-                lastLiveContentId = contentId;
-            }
 
-            Plugin.Log.Information("[XA] Seeded cached data from database for current character.");
+            plugin.Services.Log.Information("[XA] Seeded cached data from database for current character.");
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] Error seeding data from DB: {ex}");
+            plugin.Services.Log.Error($"[XA] Error seeding data from DB: {ex}");
         }
     }
 
     public void RefreshData()
     {
-        var playerState = Plugin.PlayerState;
-        if (!playerState.IsLoaded)
+        var playerState = plugin.Services.PlayerState;
+        if (!InventoryReadiness.CanCapture(plugin.Services))
             return;
 
-        if (lastLiveContentId != 0 && lastLiveContentId != playerState.ContentId)
+        if (viewingContentId.HasValue && retainedLiveCharacterCache is { } retained
+            && InventoryCapturePolicy.IsSameOwner(retained.OwnerContentId, playerState.ContentId))
+            RestoreCharacterCacheState(retained);
+
+        if (cacheOwnerContentId != 0 && cacheOwnerContentId != playerState.ContentId)
             ResetCharacterScopedCache();
 
-        var localPlayer = Plugin.ObjectTable.LocalPlayer;
+        var localPlayer = plugin.Services.ObjectTable.LocalPlayer;
         var isOnHomeworld = localPlayer == null || localPlayer.CurrentWorld.RowId == localPlayer.HomeWorld.RowId;
         var hasReliableLiveCharacterContext = localPlayer != null
-            && !Plugin.Condition[ConditionFlag.BetweenAreas]
-            && !Plugin.Condition[ConditionFlag.BetweenAreas51];
+            && !plugin.Services.Condition[ConditionFlag.BetweenAreas]
+            && !plugin.Services.Condition[ConditionFlag.BetweenAreas51];
+
+        var persistedSnapshot = plugin.Snapshots.Get(playerState.ContentId);
+        lastPersistedSnapshotContentId = playerState.ContentId;
+        lastPersistedSnapshot = persistedSnapshot;
+        if (!DataCollected && persistedSnapshot != null)
+            ApplySnapshotToCache(persistedSnapshot);
+        JournalCollector.SeedPersistedValue(persistedSnapshot?.Currencies);
 
         try
         {
-            cachedCurrencies = CurrencyCollector.Collect(Plugin.DataManager);
-            cachedJobs = JobCollector.Collect(Plugin.PlayerState, Plugin.DataManager);
-            cachedInventory = InventoryCollector.Collect();
-            var itemCollection = ItemCollector.Collect(Plugin.DataManager);
-            lastLiveCollectedItems = itemCollection.Items.Select(CloneContainerItem).ToList();
-            lastLoadedItemContainers.Clear();
-            foreach (var containerName in itemCollection.LoadedContainers)
-                lastLoadedItemContainers.Add(containerName);
-            cachedItems = itemCollection.Items;
+            lastCollectorSectionStates.Clear();
+            ApplyCollectedSection("Currencies", CurrencyCollector.CollectSection(plugin.Services), value => cachedCurrencies = value);
+            ApplyCollectedSection("Jobs", JobCollector.CollectSection(plugin.Services), value => cachedJobs = value);
+            ApplyInventoryCapture(ItemCollector.CollectSection(plugin.Services));
             // Retainers: only overwrite if live collector returns data (requires summoning bell)
-            var freshRetainers = RetainerCollector.CollectRetainerList(playerState.ContentId);
-            hasAuthoritativeLiveRetainerList = freshRetainers.Count > 0;
-            if (freshRetainers.Count > 0)
-                cachedRetainers = freshRetainers;
+            var retainerSection = RetainerCollector.CollectRetainerListSection(plugin.Services, playerState.ContentId);
+            var freshRetainers = retainerSection.Value;
+            hasAuthoritativeLiveRetainerList = retainerSection.CanReplacePersisted;
+            ApplyCollectedSection("Retainers", retainerSection, value => cachedRetainers = value);
             MergeActiveRetainerListings();
             MergeActiveRetainerInventory();
-            var freshMembers = FcMemberCollector.Collect(Plugin.DataManager);
-            // Try reading from currently-open FC/Estate addons before Collect()
-            FreeCompanyCollector.TryCollectFromOpenAddons();
-            cachedFc = FreeCompanyCollector.Collect();
-            var freshSquadron = SquadronCollector.Collect(Plugin.DataManager);
-            if (freshSquadron != null)
-                cachedSquadron = freshSquadron;
+            ApplyCollectedSection("FC members", FcMemberCollector.CollectSection(plugin.Services, plugin.ProtectOtherPlayerContentId), value => cachedFcMembers = value);
+            var freeCompanySection = FreeCompanyCollector.CollectSection(plugin.Services, isOnHomeworld && hasReliableLiveCharacterContext);
+            ApplyCollectedSection("Free company", freeCompanySection, value => cachedFc = value);
+            ApplyCollectedSection("Squadron", SquadronCollector.CollectSection(plugin.Services), value => cachedSquadron = value);
 
             // Collect voyage data (only available inside FC workshop)
-            var freshVoyages = VoyageCollector.Collect();
-            if (freshVoyages != null)
-                cachedVoyages = freshVoyages;
+            var voyageSection = freeCompanySection.State == SectionState.AuthoritativeEmpty
+                ? SectionResult<VoyageInfo?>.AuthoritativeEmpty(null)
+                : VoyageCollector.CollectSection(plugin.Services, playerState.ContentId, cachedFc?.FcId ?? 0);
+            ApplyCollectedSection("Voyages", voyageSection, value => cachedVoyages = value);
 
-            // Only replace cached members if the collector returned data
-            // (the proxy is empty when FC member list window hasn't been opened)
-            if (freshMembers.Count > 0)
-                cachedFcMembers = freshMembers;
+            ApplyCollectedSection("Collections", CollectionCollector.CollectSection(plugin.Services), value => cachedCollections = value);
+            ApplyCollectedSection("Active quests", QuestCollector.CollectActiveQuestsSection(plugin.Services), value => cachedQuests = value);
+            ApplyCollectedSection("MSQ milestones", QuestCollector.CollectMsqProgressSection(plugin.Services), value => cachedMsqMilestones = value);
+            ApplyCollectedSection("Housing", HousingCollector.CollectSection(plugin.Services, hasReliableLiveCharacterContext), value =>
+            {
+                cachedPersonalEstate = value.PersonalEstate;
+                cachedSharedEstates = value.SharedEstates;
+                cachedApartment = value.Apartment;
+            });
 
-            cachedCollections = CollectionCollector.Collect(Plugin.DataManager);
-            cachedQuests = QuestCollector.CollectActiveQuests(Plugin.DataManager);
-            cachedMsqMilestones = QuestCollector.CollectMsqProgress();
-            var housing = HousingCollector.CollectPersonalHousing();
-            cachedPersonalEstate = housing.PersonalEstate;
-            cachedSharedEstates = housing.SharedEstates;
-            cachedApartment = housing.Apartment;
-
-            var persistedSnapshot = plugin.SnapshotRepo.GetSnapshot(playerState.ContentId);
-            lastPersistedSnapshotContentId = playerState.ContentId;
-            lastPersistedSnapshot = persistedSnapshot;
-            JournalCollector.SeedPersistedValue(persistedSnapshot?.Currencies);
-            JournalCollector.TryCollectFromOpenAddon();
+            var journalSection = JournalCollector.CollectSection(plugin.Services);
+            lastCollectorSectionStates["Journal"] = journalSection.State;
+            if (journalSection.RequiresWarning)
+                QueueCollectorWarning($"Journal was {journalSection.State.ToString().ToLowerInvariant()}; the previous value was kept ({journalSection.Detail}).");
             JournalCollector.ApplyToCurrencies(cachedCurrencies);
 
-            if (persistedSnapshot == null && freshRetainers.Count == 0)
+            if (persistedSnapshot == null && retainerSection.State == SectionState.AuthoritativeEmpty && freshRetainers.Count == 0)
             {
                 cachedRetainers.Clear();
                 cachedListings.Clear();
@@ -986,8 +1015,6 @@ public partial class MainWindow : Window, IDisposable
             }
 
             ApplyPersistedRetainerState(persistedSnapshot);
-            ApplyPersistedSaddlebagState(persistedSnapshot, allowObservedSaddlebagClear: false);
-            ApplyPersistedSaddlebagInventorySummaries(persistedSnapshot, allowObservedSaddlebagClear: false);
 
             if (string.IsNullOrEmpty(cachedPersonalEstate) && !hasReliableLiveCharacterContext && persistedSnapshot != null)
                 cachedPersonalEstate = persistedSnapshot.Row.PersonalEstate;
@@ -1113,41 +1140,73 @@ public partial class MainWindow : Window, IDisposable
             NormalizeCachedRetainerState(playerState.ContentId);
 
             lastRefreshTime = DateTime.UtcNow;
-            lastLiveContentId = playerState.ContentId;
+            cacheOwnerContentId = playerState.ContentId;
+            cacheOwnerCharacterName = playerState.CharacterName.ToString();
             DataCollected = true;
 
             // Reset character selector to current character
             viewingContentId = null;
             selectedCharacterIndex = -1;
             viewingCharName = string.Empty;
+            RememberLiveCharacterCache();
 
-            Plugin.Log.Information("[XA] Data refreshed successfully.");
+            plugin.Services.Log.Information("[XA] Data refreshed successfully.");
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] Error refreshing data: {ex}");
+            plugin.Services.Log.Error($"[XA] Error refreshing data: {ex}");
         }
     }
 
     public SaveSnapshotResult RefreshAndSave(SnapshotTrigger trigger = SnapshotTrigger.Manual, string triggerDetail = "Manual refresh")
     {
-        RefreshData();
-        return SaveToDatabase(trigger, triggerDetail);
+        if (!InventoryReadiness.CanCapture(plugin.Services))
+            return QueueRefreshAndSave(trigger, triggerDetail);
+
+        var viewedState = viewingContentId.HasValue && trigger != SnapshotTrigger.Manual ? CaptureCharacterCacheState() : null;
+        var viewedId = viewingContentId;
+        var viewedName = viewingCharName;
+        var viewedIndex = selectedCharacterIndex;
+        try
+        {
+            RefreshData();
+            return SaveToDatabase(trigger, triggerDetail);
+        }
+        finally
+        {
+            if (viewedState != null)
+            {
+                RestoreCharacterCacheState(viewedState);
+                viewingContentId = viewedId;
+                viewingCharName = viewedName;
+                selectedCharacterIndex = viewedIndex;
+            }
+        }
     }
 
     public SaveSnapshotResult QueueRefreshAndSave(SnapshotTrigger trigger = SnapshotTrigger.Manual, string triggerDetail = "Manual refresh")
     {
+        var owner = plugin.Services.ClientState.IsLoggedIn ? plugin.Services.PlayerState.ContentId : 0;
+        if (owner == 0)
+            return FinishCaptureSkipped(trigger, triggerDetail, "Snapshot save not queued because no logged-in character owns the request.");
+
         refreshAndSaveQueued = true;
+        queuedSaveContentId = owner;
         queuedRefreshAndSaveTrigger = trigger;
         queuedRefreshAndSaveDetail = triggerDetail;
+        var queuedAtUtc = DateTime.UtcNow;
 
         var queuedResult = new SaveSnapshotResult
         {
             Success = false,
             Pending = true,
+            ContentId = owner,
             Trigger = trigger,
             TriggerDetail = triggerDetail,
-            SavedAtUtc = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"),
+            SavedAtUtc = SnapshotTime.Format(queuedAtUtc),
+            SavedAtLocal = SnapshotTime.FormatLocal(queuedAtUtc),
+            RefreshedAtUtc = lastRefreshTime > DateTime.MinValue ? SnapshotTime.Format(lastRefreshTime) : string.Empty,
+            RefreshedAtLocal = lastRefreshTime > DateTime.MinValue ? SnapshotTime.FormatLocal(lastRefreshTime) : string.Empty,
             Summary = $"Snapshot save queued: {triggerDetail}",
             Quality = "Saving"
         };
@@ -1159,7 +1218,19 @@ public partial class MainWindow : Window, IDisposable
 
     public void ProcessDeferredWork()
     {
+        ProcessPendingInventoryCapture();
         if (!refreshAndSaveQueued)
+            return;
+
+        if (!plugin.Services.ClientState.IsLoggedIn
+            || !InventoryCapturePolicy.IsSameOwner(queuedSaveContentId, plugin.Services.PlayerState.ContentId))
+        {
+            refreshAndSaveQueued = false;
+            FinishCaptureSkipped(queuedRefreshAndSaveTrigger, queuedRefreshAndSaveDetail,
+                "Queued snapshot discarded because the character session changed.");
+            return;
+        }
+        if (!InventoryReadiness.CanCapture(plugin.Services))
             return;
 
         var trigger = queuedRefreshAndSaveTrigger;
@@ -1175,7 +1246,9 @@ public partial class MainWindow : Window, IDisposable
     /// </summary>
     public void OnAddonOpenTrigger(AddonTriggerEvent trigger)
     {
-        if (!Plugin.PlayerState.IsLoaded || viewingContentId.HasValue)
+        CaptureLiveInventory();
+        QueueInventoryCapture();
+        if (!plugin.Services.PlayerState.IsLoaded || viewingContentId.HasValue)
             return;
 
         lastAddonTrigger = trigger;
@@ -1188,14 +1261,15 @@ public partial class MainWindow : Window, IDisposable
 
         try
         {
-            Plugin.Log.Information("[XA] Workshop addon opened — collecting voyage data.");
-            var freshVoyages = VoyageCollector.Collect();
-            if (freshVoyages != null)
-                cachedVoyages = freshVoyages;
+            plugin.Services.Log.Information("[XA] Workshop addon opened — collecting voyage data.");
+            ApplyCollectedSection(
+                "Voyages",
+                VoyageCollector.CollectSection(plugin.Services, plugin.Services.PlayerState.ContentId, cachedFc?.FcId ?? 0),
+                value => cachedVoyages = value);
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] Workshop open collect error: {ex}");
+            plugin.Services.Log.Error($"[XA] Workshop open collect error: {ex}");
             QueueCollectorWarning("Addon watcher failed to collect workshop voyage data while the workshop window was open.");
         }
     }
@@ -1208,8 +1282,17 @@ public partial class MainWindow : Window, IDisposable
     /// </summary>
     public void OnAddonSaveTrigger(AddonTriggerEvent trigger)
     {
-        if (!Plugin.PlayerState.IsLoaded || viewingContentId.HasValue)
+        // Capture while the addon/container is still readable, even with autosave disabled.
+        CaptureLiveInventory(saddlebagClosing: trigger.Category == "Saddlebag");
+        if (!plugin.Services.ClientState.IsLoggedIn || !plugin.Services.PlayerState.IsLoaded)
             return;
+
+        if (viewingContentId.HasValue)
+        {
+            if (plugin.Configuration.AddonWatcherEnabled)
+                QueueRefreshAndSave(SnapshotTrigger.AddonWatcher, trigger.TriggerDetail);
+            return;
+        }
 
         lastAddonTrigger = trigger;
         if (trigger.Category == "Estate")
@@ -1223,29 +1306,29 @@ public partial class MainWindow : Window, IDisposable
             switch (trigger.Category)
             {
                 case "Journal" when trigger.AddonName == "Journal":
-                    Plugin.Log.Information("[XA] Journal closing — reading leve allowances via pointer.");
-                    JournalCollector.CollectFromAddon(trigger.AddonPtr);
+                    plugin.Services.Log.Information("[XA] Journal closing — reading leve allowances via pointer.");
+                    JournalCollector.CollectFromAddon(plugin.Services, trigger.AddonPtr);
                     break;
 
                 case "FC Members" when trigger.AddonName == "FreeCompany":
-                    Plugin.Log.Information("[XA] FreeCompany closing — reading FC points via pointer.");
-                    FreeCompanyCollector.CollectFromAddon(trigger.AddonPtr);
+                    plugin.Services.Log.Information("[XA] FreeCompany closing — reading FC points via pointer.");
+                    FreeCompanyCollector.CollectFromAddon(plugin.Services, trigger.AddonPtr);
                     break;
 
                 case "FC Chest" when trigger.AddonName == "FreeCompanyChest":
-                    Plugin.Log.Information("[XA] FreeCompanyChest closing — reading FC chest gil via pointer.");
-                    FreeCompanyCollector.CollectChestGilFromAddon(trigger.AddonPtr);
+                    plugin.Services.Log.Information("[XA] FreeCompanyChest closing — reading FC chest gil via pointer.");
+                    FreeCompanyCollector.CollectChestGilFromAddon(plugin.Services, trigger.AddonPtr);
                     break;
 
                 case "Estate" when trigger.AddonName == "HousingSignBoard":
-                    Plugin.Log.Information("[XA] HousingSignBoard closing — reading housing info via pointer.");
-                    HousingCollector.CollectFromAddon(trigger.AddonPtr);
+                    plugin.Services.Log.Information("[XA] HousingSignBoard closing — reading housing info via pointer.");
+                    HousingCollector.CollectFromAddon(plugin.Services, trigger.AddonPtr);
                     break;
             }
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] Addon close collect error ({trigger.Category}/{trigger.AddonName}): {ex}");
+            plugin.Services.Log.Error($"[XA] Addon close collect error ({trigger.Category}/{trigger.AddonName}): {ex}");
             closeCollectorFailure = $"Addon watcher failed to collect data while closing {trigger.AddonName}.";
         }
 
@@ -1256,55 +1339,75 @@ public partial class MainWindow : Window, IDisposable
             QueueCollectorWarning(closeCollectorFailure);
 
         AddTaskLog($"[XA.DB TASK] Addon close trigger: {trigger.Category} / {trigger.AddonName}");
-        Plugin.Log.Information($"[XA] Addon trigger ({trigger.Category}) — queueing refresh and save.");
+        plugin.Services.Log.Information($"[XA] Addon trigger ({trigger.Category}) — queueing refresh and save.");
         QueueRefreshAndSave(SnapshotTrigger.AddonWatcher, trigger.TriggerDetail);
     }
 
     public SaveSnapshotResult SaveToDatabase(SnapshotTrigger trigger = SnapshotTrigger.Manual, string triggerDetail = "Manual save")
     {
-        var playerState = Plugin.PlayerState;
+        var playerState = plugin.Services.PlayerState;
+        var saveStartedUtc = DateTime.UtcNow;
         var fallbackResult = new SaveSnapshotResult
         {
             Success = false,
             Trigger = trigger,
             TriggerDetail = triggerDetail,
-            SavedAtUtc = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"),
+            SavedAtUtc = SnapshotTime.Format(saveStartedUtc),
+            SavedAtLocal = SnapshotTime.FormatLocal(saveStartedUtc),
             Summary = "Snapshot save skipped."
         };
 
-        if (!playerState.IsLoaded || !DataCollected)
+        SaveSnapshotResult FinishSkipped(string summary, string? warning = null)
         {
-            fallbackResult.Summary = "Snapshot save skipped because live data is not ready.";
+            fallbackResult.Summary = summary;
+            if (!string.IsNullOrWhiteSpace(warning))
+                fallbackResult.Warnings.Add(warning);
             fallbackResult.Quality = GetSnapshotQualityLabel(fallbackResult);
             lastSnapshotResult = fallbackResult;
             AddSaveHistoryEntry(fallbackResult);
             return fallbackResult;
         }
 
+        var hasLiveIdentity = plugin.Services.ClientState.IsLoggedIn && playerState.IsLoaded && playerState.ContentId != 0;
+        var canUseCachedLogoutIdentity = trigger == SnapshotTrigger.Logout
+            && !viewingContentId.HasValue
+            && cacheOwnerContentId != 0
+            && !string.IsNullOrWhiteSpace(cacheOwnerCharacterName);
+
+        if ((!hasLiveIdentity && !canUseCachedLogoutIdentity) || !DataCollected)
+            return FinishSkipped("Snapshot save skipped because live or cached character data is not ready.");
+
+        if (hasLiveIdentity && !InventoryCapturePolicy.IsSameOwner(cacheOwnerContentId, playerState.ContentId))
+            return FinishSkipped("Snapshot save skipped because the cached inventory belongs to another character.");
+
         if (viewingContentId.HasValue)
-        {
-            fallbackResult.Summary = "Snapshot save skipped because a stored character view is active.";
-            fallbackResult.Warnings.Add("Switch back to Current Character (Live) before saving.");
-            fallbackResult.Quality = GetSnapshotQualityLabel(fallbackResult);
-            lastSnapshotResult = fallbackResult;
-            AddSaveHistoryEntry(fallbackResult);
-            return fallbackResult;
-        }
+            return FinishSkipped(
+                "Snapshot save skipped because a stored character view is active.",
+                "Switch back to Current Character (Live) before saving.");
 
         try
         {
-            var contentId = playerState.ContentId;
-            var name = playerState.CharacterName.ToString();
-            var savedAtUtc = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
-            var localPlayer = Plugin.ObjectTable.LocalPlayer;
+            var usedCachedLogoutIdentity = !hasLiveIdentity;
+            var contentId = hasLiveIdentity ? playerState.ContentId : cacheOwnerContentId;
+            var name = hasLiveIdentity ? playerState.CharacterName.ToString() : cacheOwnerCharacterName;
+            var savedAtUtc = SnapshotTime.Format(saveStartedUtc);
+            var snapshotUpdatedAtUtc = SnapshotFreshnessPolicy.ResolveSnapshotUpdatedUtc(
+                usedCachedLogoutIdentity,
+                lastRefreshTime,
+                saveStartedUtc);
+            if (snapshotUpdatedAtUtc == DateTime.MinValue)
+                return FinishSkipped("Snapshot save skipped because cached logout data has no trustworthy live refresh time.");
+            var snapshotUpdatedUtc = SnapshotTime.Format(snapshotUpdatedAtUtc);
+            var refreshedAtUtc = lastRefreshTime > DateTime.MinValue ? SnapshotTime.Format(lastRefreshTime) : string.Empty;
+            var localPlayer = plugin.Services.ObjectTable.LocalPlayer;
             var (world, datacenter, region) = ResolveStableWorldAndDatacenter(contentId);
             var isOnHomeworld = localPlayer == null || localPlayer.CurrentWorld.RowId == localPlayer.HomeWorld.RowId;
             var hasReliableLiveCharacterContext = localPlayer != null
-                && !Plugin.Condition[ConditionFlag.BetweenAreas]
-                && !Plugin.Condition[ConditionFlag.BetweenAreas51];
+                && !plugin.Services.Condition[ConditionFlag.BetweenAreas]
+                && !plugin.Services.Condition[ConditionFlag.BetweenAreas51];
             var persistedSnapshot = lastPersistedSnapshotContentId == contentId
                 ? lastPersistedSnapshot
-                : plugin.SnapshotRepo.GetSnapshot(contentId);
+                : plugin.Snapshots.Get(contentId);
             JournalCollector.SeedPersistedValue(persistedSnapshot?.Currencies);
             JournalCollector.ApplyToCurrencies(cachedCurrencies);
             if (string.IsNullOrEmpty(cachedPersonalEstate) && !hasReliableLiveCharacterContext && persistedSnapshot != null)
@@ -1323,22 +1426,30 @@ public partial class MainWindow : Window, IDisposable
             if (isOnHomeworld && cachedFc == null && hasReliableLiveCharacterContext)
                 ClearPersistedFreeCompanyState();
             ApplyFreeCompanyGilOwnership(contentId, name);
-            ApplyPersistedSaddlebagState(persistedSnapshot, IsSaddlebagClearConfirmed(trigger));
-            ApplyPersistedSaddlebagInventorySummaries(persistedSnapshot, IsSaddlebagClearConfirmed(trigger));
             var validation = BuildValidationSummary(isOnHomeworld);
+            if (usedCachedLogoutIdentity)
+            {
+                validation.Warnings.Add(
+                    "Logout save used the last collected cache because the live character was already unloaded; snapshot freshness was not renewed.");
+            }
             AppendWarnings(validation.Warnings, ConsumePendingCollectorWarnings());
             var validationJson = JsonSerializer.Serialize(validation);
             var freshnessJson = JsonSerializer.Serialize(new
             {
                 savedAtUtc,
-                lastRefreshUtc = lastRefreshTime > DateTime.MinValue ? lastRefreshTime.ToString("yyyy-MM-dd HH:mm:ss") : string.Empty,
+                snapshotUpdatedUtc,
+                lastRefreshUtc = lastRefreshTime > DateTime.MinValue ? SnapshotTime.Format(lastRefreshTime) : string.Empty,
+                usedCachedLogoutIdentity,
                 trigger = trigger.ToString(),
                 isOnHomeworld,
                 dataCollected = DataCollected,
                 viewingStoredCharacter = viewingContentId.HasValue
             });
-            MergeActiveRetainerListings();
-            MergeActiveRetainerInventory();
+            if (InventoryReadiness.CanCapture(plugin.Services))
+            {
+                MergeActiveRetainerListings();
+                MergeActiveRetainerInventory();
+            }
             ApplyPersistedRetainerState(persistedSnapshot);
             NormalizeCachedRetainerState(contentId);
             var retainerGil = GetRetainerGilValue();
@@ -1371,6 +1482,31 @@ public partial class MainWindow : Window, IDisposable
                 validationJson);
             var normalizedRetainers = XaCharacterSnapshotRepository.NormalizeRetainerPayload(cachedRetainers, cachedListings, cachedRetainerItems, contentId);
 
+            var candidateQuality = validation.Warnings.Count > 0 ? SnapshotQuality.Partial : SnapshotQuality.Fresh;
+            if (persistedSnapshot != null)
+            {
+                var existingQuality = SnapshotQualityResolver.ClassifyPersisted(
+                    persistedSnapshot.Row.UpdatedUtc,
+                    persistedSnapshot.ParseErrors.Count > 0,
+                    saveStartedUtc,
+                    SnapshotStaleThresholdMinutes);
+                if (!SnapshotReplacementPolicy.CanReplace(
+                        persistedSnapshot.Row.ContentId,
+                        persistedSnapshot.Row.UpdatedUtc,
+                        existingQuality,
+                        contentId,
+                        snapshotUpdatedUtc,
+                        candidateQuality,
+                        candidateRetainsExistingSections: true))
+                {
+                    fallbackResult.RetainedExistingSnapshot = true;
+                    fallbackResult.Warnings.AddRange(validation.Warnings);
+                    return FinishSkipped(
+                        "Snapshot save skipped because the candidate was older or lower quality than the persisted snapshot.",
+                        "The existing snapshot was retained unchanged.");
+                }
+            }
+
             plugin.DatabaseService.BeginTransaction();
             try
             {
@@ -1400,7 +1536,7 @@ public partial class MainWindow : Window, IDisposable
                     trigger.ToString(),
                     triggerDetail,
                     false,
-                    savedAtUtc);
+                    snapshotUpdatedUtc);
                 plugin.DatabaseService.CommitTransaction();
             }
             catch
@@ -1409,11 +1545,13 @@ public partial class MainWindow : Window, IDisposable
                 throw;
             }
 
-            UpsertKnownCharacterCache(contentId, name, world, datacenter, region, savedAtUtc);
+            UpsertKnownCharacterCache(contentId, name, world, datacenter, region, snapshotUpdatedUtc);
             lastPersistedSnapshotContentId = 0;
             lastPersistedSnapshot = null;
-            InvalidateDashboardSnapshotCache();
-            RefreshItemTooltipCacheForCurrentSnapshot(contentId, name, world, savedAtUtc);
+            if (!plugin.Snapshots.Upsert(contentId))
+                plugin.Services.Log.Warning("[XA] The persisted snapshot cache retained a newer or higher-quality value after save.");
+            RefreshItemTooltipCacheForCurrentSnapshot(contentId, name, world, snapshotUpdatedUtc);
+            RefreshItemSearchResults();
 
             var result = new SaveSnapshotResult
             {
@@ -1424,6 +1562,9 @@ public partial class MainWindow : Window, IDisposable
                 Trigger = trigger,
                 TriggerDetail = triggerDetail,
                 SavedAtUtc = savedAtUtc,
+                SavedAtLocal = SnapshotTime.FormatLocal(saveStartedUtc),
+                RefreshedAtUtc = refreshedAtUtc,
+                RefreshedAtLocal = lastRefreshTime > DateTime.MinValue ? SnapshotTime.FormatLocal(lastRefreshTime) : string.Empty,
                 Gil = gil,
                 RetainerGil = retainerGil,
                 RetainerCount = cachedRetainers.Count,
@@ -1436,7 +1577,7 @@ public partial class MainWindow : Window, IDisposable
             result.Quality = GetSnapshotQualityLabel(result);
             lastSnapshotResult = result;
 
-            Plugin.Log.Information($"[XA] Saved snapshot for {name} @ {world} to database.");
+            plugin.Services.Log.Information($"[XA] Saved snapshot for {name} @ {world} to database.");
             AddTaskLog($"[XA.DB TASK] Saved snapshot for {name} @ {world} via {trigger} ({result.Quality}).");
             AddSaveHistoryEntry(result);
 
@@ -1445,7 +1586,7 @@ public partial class MainWindow : Window, IDisposable
             {
                 try
                 {
-                    Plugin.ChatGui.Print(new XivChatEntry
+                    plugin.Services.ChatGui.Print(new XivChatEntry
                     {
                         Type = XivChatType.Echo,
                         Message = new SeString(new TextPayload("[XA] Database has been saved.")),
@@ -1458,13 +1599,15 @@ public partial class MainWindow : Window, IDisposable
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] Error saving to database: {ex}");
+            plugin.Services.Log.Error($"[XA] Error saving to database: {ex}");
+            var failedAtUtc = DateTime.UtcNow;
             var result = new SaveSnapshotResult
             {
                 Success = false,
                 Trigger = trigger,
                 TriggerDetail = triggerDetail,
-                SavedAtUtc = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"),
+                SavedAtUtc = SnapshotTime.Format(failedAtUtc),
+                SavedAtLocal = SnapshotTime.FormatLocal(failedAtUtc),
                 Summary = $"Snapshot save failed: {ex.Message}",
                 Warnings = new List<string> { ex.Message },
                 Quality = string.Empty
@@ -1485,6 +1628,12 @@ public partial class MainWindow : Window, IDisposable
         string region,
         string savedAtUtc)
     {
+        if (!plugin.IsCharacterVisible(contentId))
+        {
+            knownCharacters.RemoveAll(character => character.ContentId == contentId);
+            return;
+        }
+
         var row = knownCharacters.Find(c => c.ContentId == contentId);
         if (row == null)
         {
@@ -1513,16 +1662,83 @@ public partial class MainWindow : Window, IDisposable
         xaCharacterSnapshotCount = Math.Max(xaCharacterSnapshotCount, knownCharacters.Count);
     }
 
+    private void ApplyCollectedSection<T>(string name, SectionResult<T> result, Action<T> apply)
+    {
+        lastCollectorSectionStates[name] = result.State;
+        var decision = SectionCommitPolicy.Commit(name, result.Value, result);
+        if (result.CanReplacePersisted)
+            apply(decision.Value);
+
+        foreach (var warning in decision.Warnings)
+            QueueCollectorWarning(warning);
+    }
+
+    public SaveSnapshotResult SaveForLogout(string triggerDetail = "Client logout")
+    {
+        CaptureLiveInventory();
+        ClearPendingCaptureAndSave();
+        if (!viewingContentId.HasValue)
+            return SaveToDatabase(SnapshotTrigger.Logout, triggerDetail);
+
+        var retainedLive = retainedLiveCharacterCache;
+        var currentContentId = plugin.Services.ClientState.IsLoggedIn && plugin.Services.PlayerState.IsLoaded
+            ? plugin.Services.PlayerState.ContentId
+            : 0UL;
+        if (retainedLive == null
+            || !PluginLifecycleSchedule.CanUseRetainedLiveCacheForLogout(
+                viewingStoredCharacter: true,
+                retainedDataCollected: retainedLive.DataCollected,
+                retainedContentId: retainedLive.OwnerContentId,
+                currentContentId: currentContentId))
+        {
+            return SaveToDatabase(SnapshotTrigger.Logout, triggerDetail);
+        }
+
+        var viewedState = CaptureCharacterCacheState();
+        var viewedContentId = viewingContentId;
+        var viewedCharacterName = viewingCharName;
+        var viewedCharacterIndex = selectedCharacterIndex;
+
+        try
+        {
+            RestoreCharacterCacheState(retainedLive);
+            viewingContentId = null;
+            viewingCharName = string.Empty;
+            selectedCharacterIndex = -1;
+
+            var result = SaveToDatabase(SnapshotTrigger.Logout, triggerDetail);
+            if (result.Success)
+                retainedLiveCharacterCache = CaptureCharacterCacheState();
+            return result;
+        }
+        finally
+        {
+            RestoreCharacterCacheState(viewedState);
+            viewingContentId = viewedContentId;
+            viewingCharName = viewedCharacterName;
+            selectedCharacterIndex = viewedCharacterIndex;
+        }
+    }
+
+    private bool SectionWasCollected(string name, bool fallback)
+    {
+        return lastCollectorSectionStates.TryGetValue(name, out var state)
+            ? state is SectionState.Available or SectionState.AuthoritativeEmpty
+            : fallback;
+    }
+
     private CollectorValidationSummary BuildValidationSummary(bool isOnHomeworld)
     {
         return new CollectorValidationSummary
         {
-            InventoryCollected = cachedInventory.Count > 0 || cachedItems.Count > 0,
-            RetainersCollected = cachedRetainers.Count > 0,
-            FreeCompanyCollected = cachedFc != null && isOnHomeworld,
-            VoyagesCollected = cachedVoyages != null,
-            CollectionsCollected = cachedCollections.Count > 0,
-            QuestsCollected = cachedQuests.Count > 0 || cachedMsqMilestones.Count > 0,
+            InventoryCollected = SectionWasCollected("Inventory summaries", cachedInventory.Count > 0)
+                && SectionWasCollected("Items", cachedItems.Count > 0),
+            RetainersCollected = SectionWasCollected("Retainers", cachedRetainers.Count > 0),
+            FreeCompanyCollected = SectionWasCollected("Free company", cachedFc != null && isOnHomeworld),
+            VoyagesCollected = SectionWasCollected("Voyages", cachedVoyages != null),
+            CollectionsCollected = SectionWasCollected("Collections", cachedCollections.Count > 0),
+            QuestsCollected = SectionWasCollected("Active quests", cachedQuests.Count > 0)
+                && SectionWasCollected("MSQ milestones", cachedMsqMilestones.Count > 0),
         };
     }
 
@@ -1545,7 +1761,7 @@ public partial class MainWindow : Window, IDisposable
             triggerDetail,
             character = new
             {
-                contentId = viewingContentId ?? (Plugin.PlayerState.IsLoaded ? Plugin.PlayerState.ContentId : 0UL),
+                contentId = viewingContentId ?? (plugin.Services.PlayerState.IsLoaded ? plugin.Services.PlayerState.ContentId : 0UL),
                 name = characterName,
                 world,
                 datacenter,
@@ -1609,11 +1825,43 @@ public partial class MainWindow : Window, IDisposable
                 return;
             }
 
+            var backupPath = plugin.DatabaseService.BackupDatabaseFile("pre-legacy-import");
+            if (backupPath == null)
+            {
+                SetMigrationStatus("Legacy import refused: the pre-import database backup failed.");
+                AddTaskLog("[XA.DB TASK] Legacy import refused because the pre-import backup failed.");
+                return;
+            }
+
+            var existingSnapshots = plugin.Snapshots.All();
+            var importedCount = 0;
+            var retainedCount = 0;
             plugin.DatabaseService.BeginTransaction();
             try
             {
                 foreach (var character in characters)
                 {
+                    var exportedUtc = SnapshotTime.NormalizeOrFallback(character.LastSeenUtc, DateTime.UtcNow);
+                    if (existingSnapshots.TryGetValue(character.ContentId, out var existingSnapshot))
+                    {
+                        var existingQuality = SnapshotQualityResolver.ClassifyPersisted(
+                            existingSnapshot.Row.UpdatedUtc,
+                            existingSnapshot.ParseErrors.Count > 0,
+                            DateTime.UtcNow,
+                            SnapshotStaleThresholdMinutes);
+                        if (!SnapshotReplacementPolicy.CanReplace(
+                                existingSnapshot.Row.ContentId,
+                                existingSnapshot.Row.UpdatedUtc,
+                                existingQuality,
+                                character.ContentId,
+                                exportedUtc,
+                                SnapshotQuality.LegacyBasic))
+                        {
+                            retainedCount++;
+                            continue;
+                        }
+                    }
+
                     var currencies = plugin.CurrencyRepo.GetLatest(character.ContentId);
                     var jobs = plugin.JobRepo.GetLatest(character.ContentId);
                     var inventory = plugin.InventoryRepo.GetLatest(character.ContentId);
@@ -1628,10 +1876,9 @@ public partial class MainWindow : Window, IDisposable
                     var collections = plugin.CollectionRepo.GetLatest(character.ContentId);
                     var quests = plugin.CollectionRepo.GetQuests(character.ContentId);
                     var msq = plugin.CollectionRepo.GetMsqMilestones(character.ContentId);
-                    var gil = currencies.Find(c => c.Name == "Gil")?.Amount ?? 0;
+                    var gil = currencies.Find(c => CurrencyIdentity.IsGil(c.ItemId, c.Key, c.Name))?.Amount ?? 0;
                     var retainerGil = retainers.Sum(r => (long)r.Gil);
                     var safeGil = (int)Math.Min(int.MaxValue, gil);
-                    var exportedUtc = string.IsNullOrWhiteSpace(character.LastSeenUtc) ? DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss") : character.LastSeenUtc;
                     var validation = new CollectorValidationSummary
                     {
                         InventoryCollected = inventory.Count > 0 || items.Count > 0,
@@ -1707,9 +1954,12 @@ public partial class MainWindow : Window, IDisposable
                         "Legacy table import",
                         true,
                         exportedUtc);
+                    importedCount++;
                 }
 
-                plugin.DatabaseService.DropLegacyTables();
+                if (!plugin.DatabaseService.TryDropLegacyTablesAfterImport(backupPath, out var refusalReason))
+                    throw new InvalidOperationException(refusalReason);
+
                 plugin.DatabaseService.CommitTransaction();
             }
             catch
@@ -1717,17 +1967,17 @@ public partial class MainWindow : Window, IDisposable
                 plugin.DatabaseService.RollbackTransaction();
                 throw;
             }
-            knownCharacters = plugin.CharacterRepo.GetAll();
+            knownCharacters = GetVisibleCharacters();
             InvalidateDashboardSnapshotCache();
             RefreshItemTooltipCache();
             charListQueried = true;
             RefreshMigrationState();
-            SetMigrationStatus($"Imported {characters.Count} legacy characters into xa_characters and removed legacy tables.");
-            AddTaskLog($"[XA.DB TASK] Imported {characters.Count} legacy characters into xa_characters and removed legacy tables.");
+            SetMigrationStatus($"Imported {importedCount} legacy characters, retained {retainedCount} safer existing snapshots, and removed legacy tables.");
+            AddTaskLog($"[XA.DB TASK] Imported {importedCount} legacy characters and retained {retainedCount} safer existing snapshots before removing legacy tables.");
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] Legacy import failed: {ex}");
+            plugin.Services.Log.Error($"[XA] Legacy import failed: {ex}");
             SetMigrationStatus($"Legacy import failed: {ex.Message}");
             AddTaskLog($"[XA.DB TASK] Legacy import failed: {ex.Message}");
         }
@@ -1761,7 +2011,9 @@ public partial class MainWindow : Window, IDisposable
             cachedSharedEstates = string.Empty;
             cachedApartment = string.Empty;
             DataCollected = false;
-            lastLiveContentId = 0;
+            cacheOwnerContentId = 0;
+            cacheOwnerCharacterName = string.Empty;
+            retainedLiveCharacterCache = null;
             viewingContentId = null;
             selectedCharacterIndex = -1;
             viewingCharName = string.Empty;
@@ -1776,7 +2028,7 @@ public partial class MainWindow : Window, IDisposable
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] Clear-all failed: {ex}");
+            plugin.Services.Log.Error($"[XA] Clear-all failed: {ex}");
             SetMigrationStatus($"Clear-all failed: {ex.Message}");
             AddTaskLog($"[XA.DB TASK] Clear-all failed: {ex.Message}");
         }
@@ -1868,12 +2120,12 @@ public partial class MainWindow : Window, IDisposable
             return true;
         }
 
-        if (Plugin.PlayerState.IsLoaded)
+        if (plugin.Services.PlayerState.IsLoaded)
         {
-            contentId = Plugin.PlayerState.ContentId;
-            var characterName = Plugin.PlayerState.CharacterName.ToString();
+            contentId = plugin.Services.PlayerState.ContentId;
+            var characterName = plugin.Services.PlayerState.CharacterName.ToString();
             var worldName = string.Empty;
-            try { worldName = Plugin.PlayerState.HomeWorld.Value.Name.ToString(); } catch { }
+            try { worldName = plugin.Services.PlayerState.HomeWorld.Value.Name.ToString(); } catch { }
             characterLabel = string.IsNullOrWhiteSpace(worldName) ? characterName : $"{characterName} @ {worldName}";
             if (string.IsNullOrWhiteSpace(characterLabel))
                 characterLabel = contentId.ToString();
@@ -1900,13 +2152,13 @@ public partial class MainWindow : Window, IDisposable
                 viewingCharName = string.Empty;
                 charSelectorSearch = string.Empty;
 
-                if (Plugin.PlayerState.IsLoaded)
+                if (plugin.Services.PlayerState.IsLoaded)
                     RefreshData();
                 else
                     ResetCharacterScopedCache();
             }
 
-            knownCharacters = plugin.CharacterRepo.GetAll();
+            knownCharacters = GetVisibleCharacters();
             selectedCharacterIndex = viewingContentId.HasValue
                 ? knownCharacters.FindIndex(c => c.ContentId == viewingContentId.Value)
                 : -1;
@@ -1914,13 +2166,13 @@ public partial class MainWindow : Window, IDisposable
             RefreshItemTooltipCache();
             RefreshMigrationState();
 
-            Plugin.Log.Information($"[XA] Deleted character snapshot for {characterLabel} (cid={contentId}).");
+            plugin.Services.Log.Information($"[XA] Deleted character snapshot for {characterLabel} (cid={contentId}).");
             return true;
         }
         catch (Exception ex)
         {
             errorMessage = ex.Message;
-            Plugin.Log.Error($"[XA] Failed to delete character snapshot for {characterLabel} (cid={contentId}): {ex}");
+            plugin.Services.Log.Error($"[XA] Failed to delete character snapshot for {characterLabel} (cid={contentId}): {ex}");
             return false;
         }
     }
@@ -1935,10 +2187,11 @@ public partial class MainWindow : Window, IDisposable
     {
         try
         {
-            var snapshot = plugin.SnapshotRepo.GetSnapshot(contentId);
+            var snapshot = plugin.Snapshots.Get(contentId);
             if (snapshot == null)
                 return;
 
+            RememberLiveCharacterCache();
             ResetCharacterScopedCache();
             ApplySnapshotToCache(snapshot);
             DataCollected = true;
@@ -1947,11 +2200,11 @@ public partial class MainWindow : Window, IDisposable
             var charRow = knownCharacters.Find(c => c.ContentId == contentId);
             viewingCharName = charRow != null ? $"{charRow.Name} @ {charRow.World}" : contentId.ToString();
 
-            Plugin.Log.Information($"[XA] Loaded DB data for {viewingCharName} (cid={contentId}, retainers={cachedRetainers.Count}, currencies={cachedCurrencies.Count}, jobs={cachedJobs.Count})");
+            plugin.Services.Log.Information($"[XA] Loaded DB data for {viewingCharName} (cid={contentId}, retainers={cachedRetainers.Count}, currencies={cachedCurrencies.Count}, jobs={cachedJobs.Count})");
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] Error loading character from DB: {ex}");
+            plugin.Services.Log.Error($"[XA] Error loading character from DB: {ex}");
         }
     }
 
@@ -1959,29 +2212,32 @@ public partial class MainWindow : Window, IDisposable
     /// Called from Plugin.OnFrameworkUpdate when player first loads.
     /// Runs expensive DB seed + data refresh outside of Draw() to avoid HITCH warnings.
     /// </summary>
-    public void DoInitialSeed()
+    public bool DoInitialSeed()
     {
+        retainedLiveCharacterCache = null;
         ResetCharacterScopedCache();
         viewingContentId = null;
         selectedCharacterIndex = -1;
         viewingCharName = string.Empty;
         charSelectorSearch = string.Empty;
         SeedFromDatabase();
-        knownCharacters = plugin.CharacterRepo.GetAll();
-        InvalidateDashboardSnapshotCache();
-        RefreshAndSave(SnapshotTrigger.Login, "Initial load");
+        knownCharacters = GetVisibleCharacters();
+        var result = RefreshAndSave(SnapshotTrigger.Login, "Initial load");
+        return PluginLifecycleSchedule.IsInitialSeedComplete(
+            result.Success,
+            result.RetainedExistingSnapshot);
     }
 
     public override void Draw()
     {
-        var isLoggedIn = Plugin.PlayerState.IsLoaded;
+        var isLoggedIn = plugin.Services.PlayerState.IsLoaded;
         var showLegacyWarning = legacyMigrationPending;
 
         // Load character list from DB once (for selector, works logged in or out)
         if (knownCharacters.Count == 0 && !charListQueried)
         {
             charListQueried = true;
-            knownCharacters = plugin.CharacterRepo.GetAll();
+            knownCharacters = GetVisibleCharacters();
             InvalidateDashboardSnapshotCache();
         }
 
@@ -2191,6 +2447,9 @@ public sealed class SaveSnapshotResult
     public SnapshotTrigger Trigger { get; init; }
     public string TriggerDetail { get; init; } = string.Empty;
     public string SavedAtUtc { get; init; } = string.Empty;
+    public string SavedAtLocal { get; init; } = string.Empty;
+    public string RefreshedAtUtc { get; init; } = string.Empty;
+    public string RefreshedAtLocal { get; init; } = string.Empty;
     public int Gil { get; init; }
     public long RetainerGil { get; init; }
     public int RetainerCount { get; init; }
@@ -2199,6 +2458,7 @@ public sealed class SaveSnapshotResult
     public string Summary { get; set; } = string.Empty;
     public string Quality { get; set; } = string.Empty;
     public List<string> Warnings { get; init; } = new();
+    internal bool RetainedExistingSnapshot { get; set; }
 }
 
 public sealed class CollectorValidationSummary

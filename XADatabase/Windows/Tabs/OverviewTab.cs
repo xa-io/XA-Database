@@ -8,6 +8,7 @@ using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using Lumina.Excel.Sheets;
 using XADatabase.Collectors;
+using XADatabase.Core.Localization;
 using XADatabase.Database;
 using XADatabase.Models;
 using Dalamud.Game.Text;
@@ -33,7 +34,7 @@ public partial class MainWindow
 
         ImGui.Spacing();
 
-        var playerState = Plugin.PlayerState;
+        var playerState = plugin.Services.PlayerState;
         if (!playerState.IsLoaded && !viewingContentId.HasValue)
         {
             ImGui.TextColored(new Vector4(1.0f, 0.6f, 0.0f, 1.0f), "Not logged in \u2014 select a character above to view data.");
@@ -100,8 +101,8 @@ public partial class MainWindow
                         ImGui.Text($"{playerState.ClassJob.Value.Abbreviation} Lv.{playerState.Level}");
                     }
 
-                    var territoryId = Plugin.ClientState.TerritoryType;
-                    if (Plugin.DataManager.GetExcelSheet<TerritoryType>().TryGetRow(territoryId, out var territoryRow))
+                    var territoryId = plugin.Services.ClientState.TerritoryType;
+                    if (plugin.Services.DataManager.GetExcelSheet<TerritoryType>().TryGetRow(territoryId, out var territoryRow))
                     {
                         ImGui.TableNextRow();
                         ImGui.TableNextColumn();
@@ -126,7 +127,7 @@ public partial class MainWindow
                 }
 
                 // Gil from currency collector
-                var gilEntry = cachedCurrencies.Find(c => c.Name == "Gil");
+                var gilEntry = cachedCurrencies.Find(c => CurrencyIdentity.IsGil(c.ItemId, c.Key, c.Name));
                 if (gilEntry != null)
                 {
                     ImGui.TableNextRow();

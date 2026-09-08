@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Microsoft.Data.Sqlite;
 using XADatabase.Models;
@@ -17,7 +17,7 @@ public class CurrencyRepository
     public void SaveSnapshot(ulong contentId, List<CurrencyEntry> currencies)
     {
         var conn = db.GetConnection();
-        var now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
+        var now = SnapshotTime.Format(DateTime.UtcNow);
 
         var ownTransaction = !db.HasActiveTransaction;
         var transaction = ownTransaction ? conn.BeginTransaction() : null;
@@ -35,12 +35,12 @@ public class CurrencyRepository
                         amount = @amount,
                         cap = @cap,
                         updated_utc = @now";
-                upsertCmd.Parameters.AddWithValue("@cid", (long)contentId);
-                upsertCmd.Parameters.AddWithValue("@name", entry.Name);
-                upsertCmd.Parameters.AddWithValue("@cat", entry.Category);
-                upsertCmd.Parameters.AddWithValue("@amount", entry.Amount);
-                upsertCmd.Parameters.AddWithValue("@cap", entry.Cap);
-                upsertCmd.Parameters.AddWithValue("@now", now);
+                upsertCmd.Parameters.AddTypedValue("@cid", (long)contentId);
+                upsertCmd.Parameters.AddTypedValue("@name", entry.Name);
+                upsertCmd.Parameters.AddTypedValue("@cat", entry.Category);
+                upsertCmd.Parameters.AddTypedValue("@amount", entry.Amount);
+                upsertCmd.Parameters.AddTypedValue("@cap", entry.Cap);
+                upsertCmd.Parameters.AddTypedValue("@now", now);
                 upsertCmd.ExecuteNonQuery();
             }
 
@@ -55,18 +55,6 @@ public class CurrencyRepository
         finally { if (ownTransaction) transaction?.Dispose(); }
     }
 
-    /// <summary>
-    /// Prune old currency_history rows using a tiered retention policy:
-    /// - Keep all rows from the last 7 days
-    /// - Keep 1 per day for rows 7-90 days old
-    /// - Keep 1 per week for rows 90-365 days old
-    /// - Delete everything older than 365 days
-    /// </summary>
-    public void PruneHistory()
-    {
-        return;
-    }
-
     public List<CurrencyEntry> GetLatest(ulong contentId)
     {
         var results = new List<CurrencyEntry>();
@@ -77,7 +65,7 @@ public class CurrencyRepository
             FROM currency_balances
             WHERE content_id = @cid
             ORDER BY category, currency_name";
-        cmd.Parameters.AddWithValue("@cid", (long)contentId);
+        cmd.Parameters.AddTypedValue("@cid", (long)contentId);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {

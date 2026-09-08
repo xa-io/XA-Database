@@ -53,7 +53,7 @@ public partial class MainWindow
 
         ImGui.Spacing();
 
-        var playerState = Plugin.PlayerState;
+        var playerState = plugin.Services.PlayerState;
         if (!playerState.IsLoaded && cachedInventory.Count == 0)
         {
             ImGui.TextColored(new Vector4(1.0f, 0.6f, 0.0f, 1.0f), "Not logged in \u2014 select a character above to view data.");

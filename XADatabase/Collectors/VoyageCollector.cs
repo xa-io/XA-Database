@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
 using FFXIVClientStructs.FFXIV.Client.Game;
+using XADatabase.Core.Collection;
 using XADatabase.Models;
+using XADatabase.Services;
 
 namespace XADatabase.Collectors;
 
@@ -19,12 +21,43 @@ public static class VoyageCollector
     /// Submarine data only exists while the panel is open, so we cache it.
     /// </summary>
     private static VoyageInfo? sessionCache;
+    private static ulong sessionCacheOwnerContentId;
+    private static ulong sessionCacheFcId;
+
+    public static SectionResult<VoyageInfo?> CollectSection(XaServices services, ulong ownerContentId, ulong fcId)
+    {
+        try
+        {
+            if (sessionCacheOwnerContentId != ownerContentId || sessionCacheFcId != fcId)
+                ClearPersistedValues();
+
+            var value = Collect(services);
+            if (value == null)
+                return SectionResult<VoyageInfo?>.Unavailable(null, "workshop vessel data is not loaded");
+
+            sessionCacheOwnerContentId = ownerContentId;
+            sessionCacheFcId = fcId;
+            return SectionResult<VoyageInfo?>.Available(value);
+        }
+        catch (Exception ex)
+        {
+            services.Log.Error(ex, "[XA] Voyage collection failed.");
+            return SectionResult<VoyageInfo?>.Failed(null, ex.Message);
+        }
+    }
+
+    public static void ClearPersistedValues()
+    {
+        sessionCache = null;
+        sessionCacheOwnerContentId = 0;
+        sessionCacheFcId = 0;
+    }
 
     /// <summary>
     /// Collect voyage data. Returns null if not in workshop or data unavailable.
     /// Uses session cache if fresh data is empty but we're in the workshop.
     /// </summary>
-    public static unsafe VoyageInfo? Collect()
+    public static unsafe VoyageInfo? Collect(XaServices services)
     {
         try
         {
@@ -76,21 +109,21 @@ public static class VoyageCollector
                                 Favor = (short)a.Favor,
                             };
                             entry.BuildString = VoyagePartLookup.GetBuildString(entry.HullId, entry.SternId, entry.BowId, entry.BridgeId);
-                            Plugin.Log.Debug($"[XA] Airship #{i}: Hull={entry.HullId} Stern={entry.SternId} Bow={entry.BowId} Bridge={entry.BridgeId} => {entry.BuildString}");
+                            services.Log.Debug($"[XA] Airship #{i}: Hull={entry.HullId} Stern={entry.SternId} Bow={entry.BowId} Bridge={entry.BridgeId} => {entry.BuildString}");
                             info.Airships.Add(entry);
                         }
                         catch (Exception ex)
                         {
-                            Plugin.Log.Error($"[XA] Error reading airship slot {i}: {ex.Message}");
+                            services.Log.Error($"[XA] Error reading airship slot {i}: {ex.Message}");
                         }
                     }
                 }
 
-                Plugin.Log.Debug($"[XA] VoyageCollector: {info.Airships.Count} airship(s)");
+                services.Log.Debug($"[XA] VoyageCollector: {info.Airships.Count} airship(s)");
             }
             catch (Exception ex)
             {
-                Plugin.Log.Error($"[XA] Error reading airship data: {ex.Message}");
+                services.Log.Error($"[XA] Error reading airship data: {ex.Message}");
             }
 
             // ── Submarines ──
@@ -126,34 +159,34 @@ public static class VoyageCollector
                             Favor = (short)s.FavorBase,
                         };
                         entry.BuildString = VoyagePartLookup.GetBuildString(entry.HullId, entry.SternId, entry.BowId, entry.BridgeId);
-                        Plugin.Log.Debug($"[XA] Sub #{i}: Hull={entry.HullId} Stern={entry.SternId} Bow={entry.BowId} Bridge={entry.BridgeId} => {entry.BuildString}");
+                        services.Log.Debug($"[XA] Sub #{i}: Hull={entry.HullId} Stern={entry.SternId} Bow={entry.BowId} Bridge={entry.BridgeId} => {entry.BuildString}");
                         info.Submarines.Add(entry);
                     }
                     catch (Exception ex)
                     {
-                        Plugin.Log.Error($"[XA] Error reading submarine slot {i}: {ex.Message}");
+                        services.Log.Error($"[XA] Error reading submarine slot {i}: {ex.Message}");
                     }
                 }
 
-                Plugin.Log.Debug($"[XA] VoyageCollector: {info.Submarines.Count} submarine(s)");
+                services.Log.Debug($"[XA] VoyageCollector: {info.Submarines.Count} submarine(s)");
             }
             catch (Exception ex)
             {
-                Plugin.Log.Error($"[XA] Error reading submarine data: {ex.Message}");
+                services.Log.Error($"[XA] Error reading submarine data: {ex.Message}");
             }
 
             // Fresh data found — update session cache
             if (info.Airships.Count > 0 || info.Submarines.Count > 0)
             {
                 sessionCache = info;
-                Plugin.Log.Debug($"[XA] VoyageCollector: cached {info.Airships.Count} airship(s), {info.Submarines.Count} sub(s)");
+                services.Log.Debug($"[XA] VoyageCollector: cached {info.Airships.Count} airship(s), {info.Submarines.Count} sub(s)");
                 return info;
             }
 
             // No fresh data but we're in workshop — return session cache if available
             if (sessionCache != null)
             {
-                Plugin.Log.Debug("[XA] VoyageCollector: panel not open, returning session cache");
+                services.Log.Debug("[XA] VoyageCollector: panel not open, returning session cache");
                 return sessionCache;
             }
 
@@ -161,7 +194,7 @@ public static class VoyageCollector
         }
         catch (Exception ex)
         {
-            Plugin.Log.Error($"[XA] VoyageCollector error: {ex}");
+            services.Log.Error($"[XA] VoyageCollector error: {ex}");
             return null;
         }
     }

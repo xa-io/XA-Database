@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Microsoft.Data.Sqlite;
 using XADatabase.Models;
@@ -17,7 +17,7 @@ public class JobRepository
     public void SaveSnapshot(ulong contentId, List<JobEntry> jobs)
     {
         var conn = db.GetConnection();
-        var now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
+        var now = SnapshotTime.Format(DateTime.UtcNow);
 
         var ownTransaction = !db.HasActiveTransaction;
         var transaction = ownTransaction ? conn.BeginTransaction() : null;
@@ -35,13 +35,13 @@ public class JobRepository
                         level = @level,
                         is_unlocked = @unlocked,
                         updated_utc = @now";
-                cmd.Parameters.AddWithValue("@cid", (long)contentId);
-                cmd.Parameters.AddWithValue("@abbr", job.Abbreviation);
-                cmd.Parameters.AddWithValue("@name", job.Name);
-                cmd.Parameters.AddWithValue("@cat", job.Category);
-                cmd.Parameters.AddWithValue("@level", job.Level);
-                cmd.Parameters.AddWithValue("@unlocked", job.IsUnlocked ? 1 : 0);
-                cmd.Parameters.AddWithValue("@now", now);
+                cmd.Parameters.AddTypedValue("@cid", (long)contentId);
+                cmd.Parameters.AddTypedValue("@abbr", job.Abbreviation);
+                cmd.Parameters.AddTypedValue("@name", job.Name);
+                cmd.Parameters.AddTypedValue("@cat", job.Category);
+                cmd.Parameters.AddTypedValue("@level", job.Level);
+                cmd.Parameters.AddTypedValue("@unlocked", job.IsUnlocked ? 1 : 0);
+                cmd.Parameters.AddTypedValue("@now", now);
                 cmd.ExecuteNonQuery();
             }
 
@@ -64,7 +64,7 @@ public class JobRepository
             FROM job_levels
             WHERE content_id = @cid
             ORDER BY category, abbreviation";
-        cmd.Parameters.AddWithValue("@cid", (long)contentId);
+        cmd.Parameters.AddTypedValue("@cid", (long)contentId);
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {

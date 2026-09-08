@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
-    <Version>0.0.0.40</Version>
+    <Version>0.0.0.41</Version>
     <PackageProjectUrl>https://github.com/xa-io</PackageProjectUrl>
     <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
     <IsPackable>false</IsPackable>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <XAExtraDefineConstants></XAExtraDefineConstants>
     <DefineConstants Condition="'$(XAExtraDefineConstants)' != ''">$(DefineConstants);$(XAExtraDefineConstants)</DefineConstants>
   </PropertyGroup>
@@ -14,8 +15,12 @@
   <ItemGroup>
     <Compile Remove="backups\**" />
     <Compile Remove="**\backups\**" />
+    <Compile Remove="Database\SnapshotTime.cs" />
     <None Remove="backups\**" />
     <None Remove="**\backups\**" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\XADatabase.Core\XADatabase.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />

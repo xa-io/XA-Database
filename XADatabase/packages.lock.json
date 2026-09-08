@@ -68,6 +68,9 @@
         "dependencies": {
           "SQLitePCLRaw.core": "3.0.3"
         }
+      },
+      "xadatabase.core": {
+        "type": "Project"
       }
     }
   }
