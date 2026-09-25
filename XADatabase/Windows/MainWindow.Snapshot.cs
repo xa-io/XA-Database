@@ -199,6 +199,31 @@ public partial class MainWindow
         retainedLiveCharacterCache = CaptureCharacterCacheState();
     }
 
+    private void ResetDashboardFreeCompanyGil(ulong contentId, ulong fcId)
+    {
+        int updated;
+        try
+        {
+            updated = plugin.SnapshotRepo.ResetFreeCompanyGil(contentId, fcId);
+        }
+        catch (Exception ex)
+        {
+            SetSettingsStatus("FC chest gil reset failed. No reset was applied; check the log and try again.");
+            plugin.Services.Log.Error(ex, $"[XA] FC chest gil reset failed (cid={contentId}, fcId={fcId}).");
+            return;
+        }
+
+        // The database commit must succeed before any observed/cache state changes.
+        FreeCompanyCollector.ResetChestGil(fcId, cachedFc?.FcId ?? 0);
+        cachedFc?.ResetChestGil(fcId);
+        lastPersistedSnapshot?.FreeCompany?.ResetChestGil(fcId);
+        retainedLiveCharacterCache?.FreeCompany?.ResetChestGil(fcId);
+        retainedLiveCharacterCache?.LastPersistedSnapshot?.FreeCompany?.ResetChestGil(fcId);
+        InvalidateDashboardSnapshotCache();
+        SetSettingsStatus($"FC chest gil reset to 0 in {updated} saved character(s). Visit the FC chest to capture it again.");
+        plugin.Services.Log.Information($"[XA] Reset saved FC chest gil (fcId={fcId}, snapshots={updated}).");
+    }
+
     private void InvalidateDashboardSnapshotCache()
     {
         plugin.Snapshots.Invalidate();

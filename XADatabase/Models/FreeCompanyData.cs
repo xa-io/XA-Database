@@ -16,4 +16,14 @@ public class FreeCompanyEntry
     public int FcGil { get; set; }
     public bool FcGilObserved { get; set; }
     public string Estate { get; set; } = string.Empty;
+
+    public bool ResetChestGil(ulong fcId)
+    {
+        if (fcId == 0 || FcId != fcId)
+            return false;
+
+        FcGil = 0;
+        FcGilObserved = true;
+        return true;
+    }
 }

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Data.Sqlite;
 using XADatabase.Core.Localization;
 using XADatabase.Core.Storage;
@@ -195,6 +196,76 @@ public sealed class XaCharacterSnapshotRepository
         }
 
         return (0, false, 0);
+    }
+
+    /// <summary>Clear one FC's saved chest gil without refreshing unrelated snapshot data.</summary>
+    public int ResetFreeCompanyGil(ulong contentId, ulong expectedFcId)
+    {
+        if (contentId == 0 || expectedFcId == 0)
+            throw new InvalidOperationException("A saved character with a known FC identity is required.");
+        if (db.HasActiveTransaction)
+            throw new InvalidOperationException("A database save is already in progress. Try again after it finishes.");
+
+        var conn = db.GetConnection();
+        using var transaction = conn.BeginTransaction();
+        var updates = new List<(long ContentId, string Json)>();
+        var selectedFound = false;
+        using (var select = conn.CreateCommand())
+        {
+            select.Transaction = transaction;
+            select.CommandText = "SELECT content_id, free_company_json FROM xa_characters WHERE fc_id = @fcid";
+            select.Parameters.AddTypedValue("@fcid", expectedFcId);
+            using var reader = select.ExecuteReader();
+            while (reader.Read())
+            {
+                var storedContentId = reader.GetInt64(0);
+                var isSelected = SqliteIdentity.Decode(storedContentId) == contentId;
+                var json = reader.IsDBNull(1) ? "null" : reader.GetString(1);
+                var fc = JsonSerializer.Deserialize<FreeCompanyEntry>(json, JsonOptions);
+                if (fc == null && !isSelected)
+                    continue;
+                if (fc == null || fc.FcId != expectedFcId)
+                    throw new InvalidOperationException("Saved FC identity changed or is incomplete. Refresh the Dashboard and try again.");
+
+                using var document = JsonDocument.Parse(json);
+                if (document.RootElement.EnumerateObject().Any(property =>
+                    property.Name.Equals(nameof(FreeCompanyEntry.FcId), StringComparison.OrdinalIgnoreCase)
+                    && (property.Value.ValueKind != JsonValueKind.Number
+                        || !property.Value.TryGetUInt64(out var identity)
+                        || identity != expectedFcId)))
+                {
+                    throw new InvalidOperationException("Saved FC data contains conflicting identities. The reset was cancelled.");
+                }
+
+                var payload = JsonNode.Parse(json)!.AsObject();
+                // Keep unknown fields, and normalize aliases accepted by the case-insensitive reader.
+                foreach (var key in payload.Select(pair => pair.Key).Where(key =>
+                    key.Equals(nameof(FreeCompanyEntry.FcGil), StringComparison.OrdinalIgnoreCase)
+                    || key.Equals(nameof(FreeCompanyEntry.FcGilObserved), StringComparison.OrdinalIgnoreCase)).ToArray())
+                {
+                    payload.Remove(key);
+                }
+                payload[nameof(FreeCompanyEntry.FcGil)] = 0;
+                payload[nameof(FreeCompanyEntry.FcGilObserved)] = true;
+                updates.Add((storedContentId, payload.ToJsonString()));
+                selectedFound |= isSelected;
+            }
+        }
+
+        if (!selectedFound)
+            throw new InvalidOperationException("The selected saved character or FC changed. Refresh the Dashboard and try again.");
+
+        foreach (var update in updates)
+        {
+            using var command = conn.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = "UPDATE xa_characters SET free_company_json = @json WHERE content_id = @cid";
+            command.Parameters.AddTypedValue("@cid", update.ContentId);
+            command.Parameters.AddTypedValue("@json", update.Json);
+            command.ExecuteNonQuery();
+        }
+        transaction.Commit();
+        return updates.Count;
     }
 
     public static XaCharacterSnapshotSections BuildSections(

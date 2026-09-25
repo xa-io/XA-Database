@@ -174,6 +174,19 @@ public static class FreeCompanyCollector
             LastFcRank = fcRank;
     }
 
+    /// <summary>Apply a committed manual reset only to the matching collector owner.</summary>
+    public static void ResetChestGil(ulong fcId, ulong cachedFcId)
+    {
+        if (fcId == 0
+            || (LastObservedFcGilFcId != fcId
+                && !(LastObservedFcGilFcId == 0 && cachedFcId == fcId)))
+            return;
+
+        LastFcGil = 0;
+        HasObservedFcChestGil = true;
+        LastObservedFcGilFcId = fcId;
+    }
+
     public static void ClearPersistedValues()
     {
         LastCollectedRankNames = new Dictionary<int, string>();

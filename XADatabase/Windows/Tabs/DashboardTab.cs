@@ -106,6 +106,7 @@ public partial class MainWindow
         var deleteModifierHeld = IsDeleteModifierHeld();
         ulong? pendingDeleteContentId = null;
         string pendingDeleteLabel = string.Empty;
+        (ulong ContentId, ulong FcId)? pendingFcGilReset = null;
 
         using (var dashTable = ImRaii.Table("DashboardTable", colCount,
             ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY | ImGuiTableFlags.ScrollX
@@ -120,7 +121,7 @@ public partial class MainWindow
                 ImGui.TableSetupColumn("Region", ImGuiTableColumnFlags.WidthFixed, Scale(70f));
                 ImGui.TableSetupColumn("Gil", ImGuiTableColumnFlags.WidthFixed, Scale(90f));
                 ImGui.TableSetupColumn("Retainer Gil", ImGuiTableColumnFlags.WidthFixed, Scale(100f));
-                ImGui.TableSetupColumn("FC Chest Gil", ImGuiTableColumnFlags.WidthFixed, Scale(110f));
+                ImGui.TableSetupColumn("FC Chest Gil", ImGuiTableColumnFlags.WidthFixed, Scale(140f));
                 ImGui.TableSetupColumn("Market", ImGuiTableColumnFlags.WidthFixed, Scale(90f));
                 ImGui.TableSetupColumn("Retainers", ImGuiTableColumnFlags.WidthFixed, Scale(65f));
                 ImGui.TableSetupColumn("Listings", ImGuiTableColumnFlags.WidthFixed, Scale(60f));
@@ -212,10 +213,27 @@ public partial class MainWindow
                     ImGui.TableNextColumn(); ImGui.Text($"{row.Gil:N0}");
                     ImGui.TableNextColumn(); ImGui.Text($"{row.RetainerGil:N0}");
                     ImGui.TableNextColumn();
+                    var gilCellStartX = ImGui.GetCursorPosX();
+                    var gilCellWidth = ImGui.GetContentRegionAvail().X;
                     if (row.FcChestGil > 0)
                         ImGui.TextColored(new Vector4(1.0f, 0.9f, 0.3f, 1.0f), $"{row.FcChestGil:N0}");
                     else
                         ImGui.TextDisabled("0");
+                    var fcId = snapshotMap[row.ContentId].FreeCompany?.FcId ?? 0;
+                    var resetButtonX = gilCellStartX + MathF.Max(
+                        ImGui.CalcTextSize($"{row.FcChestGil:N0}").X + ImGui.GetStyle().ItemSpacing.X,
+                        gilCellWidth - deleteButtonWidth);
+                    ImGui.SameLine();
+                    // This position already includes the table column offset.
+                    ImGui.SetCursorPosX(resetButtonX);
+                    ImGui.BeginDisabled(fcId == 0 || row.FcChestGil == 0);
+                    if (ImGui.SmallButton($"X##DashboardResetFcGil{row.ContentId}"))
+                        pendingFcGilReset = (row.ContentId, fcId);
+                    ImGui.EndDisabled();
+                    if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                        ImGui.SetTooltip(fcId == 0
+                            ? "No saved FC identity is available."
+                            : "Reset saved chest gil to 0 for this FC's characters. Visit the FC chest to capture it again.");
                     ImGui.TableNextColumn();
                     if (row.MarketValue > 0)
                         ImGui.TextColored(new Vector4(0.4f, 0.8f, 1.0f, 1.0f), $"{row.MarketValue:N0}");
@@ -289,6 +307,9 @@ public partial class MainWindow
                     ImGui.TableNextColumn();
             }
         }
+
+        if (pendingFcGilReset.HasValue)
+            ResetDashboardFreeCompanyGil(pendingFcGilReset.Value.ContentId, pendingFcGilReset.Value.FcId);
 
         if (pendingDeleteContentId.HasValue)
         {
