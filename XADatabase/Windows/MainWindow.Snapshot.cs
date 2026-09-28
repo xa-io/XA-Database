@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using XADatabase.Collectors;
 using XADatabase.Core.Collection;
+using XADatabase.Core.Policies;
 using XADatabase.Database;
 using XADatabase.Models;
 
@@ -167,6 +168,7 @@ public partial class MainWindow
         hasAuthoritativeLiveRetainerList = state.HasAuthoritativeLiveRetainerList;
 
         FreeCompanyCollector.ClearPersistedValues();
+        FcMemberCollector.ClearPersistedValues();
         if (cachedFc != null)
         {
             FreeCompanyCollector.SeedPersistedValues(
@@ -500,11 +502,11 @@ public partial class MainWindow
     private void ClearPersistedFreeCompanyState()
     {
         cachedFc = null;
-        cachedFcMembers.Clear();
+        cachedFcMembers = new List<FcMemberEntry>();
         cachedVoyages = null;
         FreeCompanyCollector.ClearPersistedValues();
         FcMemberCollector.ClearPersistedValues();
-        HousingCollector.ResetPersonalHousingState();
+        VoyageCollector.ClearPersistedValues();
     }
 
     private void ApplyFcMemberRankNames(XaCharacterSnapshotData? persistedSnapshot)
@@ -512,9 +514,13 @@ public partial class MainWindow
         if (cachedFcMembers.Count == 0)
             return;
 
-        var addonRanksByName = BuildRankNameByNameLookup(FreeCompanyCollector.LastAddonMemberRanks);
-        var persistedRanks = BuildPersistedFcMemberRankLookup(persistedSnapshot?.FcMembers);
-        var sortRanks = FreeCompanyCollector.LastCollectedRankNames;
+        var collectorMatches = FreeCompanyIdentityPolicy.CanReuse(cachedFc?.FcId ?? 0, FreeCompanyCollector.LastFcId);
+        var addonRanksByName = BuildRankNameByNameLookup(collectorMatches
+            ? FreeCompanyCollector.LastAddonMemberRanks : new Dictionary<string, string>());
+        var persistedRanks = BuildPersistedFcMemberRankLookup(
+            FreeCompanyIdentityPolicy.CanReuse(cachedFc?.FcId ?? 0, persistedSnapshot?.FreeCompany?.FcId ?? 0)
+                ? persistedSnapshot?.FcMembers : null);
+        var sortRanks = collectorMatches ? FreeCompanyCollector.LastCollectedRankNames : new Dictionary<int, string>();
 
         foreach (var member in cachedFcMembers)
         {

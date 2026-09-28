@@ -6,6 +6,7 @@ using FFXIVClientStructs.FFXIV.Client.UI.Info;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using XADatabase.Data;
 using XADatabase.Core.Collection;
+using XADatabase.Core.Policies;
 using XADatabase.Models;
 using XADatabase.Services;
 
@@ -13,6 +14,22 @@ namespace XADatabase.Collectors;
 
 public static class FreeCompanyCollector
 {
+    public static ulong LastFcId { get; private set; }
+
+    internal static unsafe bool TryGetCurrentFcId(out ulong fcId)
+    {
+        var proxy = InfoProxyFreeCompany.Instance();
+        fcId = proxy == null ? 0 : proxy->Id;
+        return proxy != null;
+    }
+
+    private static void EnsureFcOwner(ulong fcId)
+    {
+        if (LastFcId == fcId) return;
+        ClearPersistedValues();
+        LastFcId = fcId;
+    }
+
     private static readonly string[] GrandCompanyNames =
     {
         "None",
@@ -79,11 +96,19 @@ public static class FreeCompanyCollector
     {
         try
         {
+            var localPlayer = services.ObjectTable.LocalPlayer;
+            var liveTag = services.ClientState.IsLoggedIn && services.PlayerState.IsLoaded
+                && localPlayer != null
+                && !services.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BetweenAreas]
+                && !services.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BetweenAreas51]
+                    ? localPlayer.CompanyTag.TextValue.Trim() : null;
+            if (TryGetCurrentFcId(out var fcId) && (fcId != 0 || canProveAuthoritativeEmpty && liveTag == string.Empty))
+                EnsureFcOwner(fcId);
             TryCollectFromOpenAddons(services);
-            var value = Collect();
+            var value = Collect(liveTag);
             if (value == null)
             {
-                return canProveAuthoritativeEmpty
+                return canProveAuthoritativeEmpty && liveTag == string.Empty
                     ? SectionResult<FreeCompanyEntry?>.AuthoritativeEmpty(null)
                     : SectionResult<FreeCompanyEntry?>.Unavailable(null, "free-company identity is not authoritative in the current character context");
             }
@@ -97,7 +122,7 @@ public static class FreeCompanyCollector
         }
     }
 
-    public static unsafe FreeCompanyEntry? Collect()
+    public static unsafe FreeCompanyEntry? Collect(string? liveTag = null)
     {
         var proxy = InfoProxyFreeCompany.Instance();
         if (proxy == null)
@@ -106,6 +131,8 @@ public static class FreeCompanyCollector
         // No FC if ID is 0
         if (proxy->Id == 0)
             return null;
+
+        EnsureFcOwner(proxy->Id);
 
         var gcByte = (int)proxy->GrandCompany;
         var gcName = gcByte >= 0 && gcByte < GrandCompanyNames.Length ? GrandCompanyNames[gcByte] : "Unknown";
@@ -117,10 +144,11 @@ public static class FreeCompanyCollector
             fcName = LastFcName;
         var fcMaster = SpanToString(proxy->Master);
 
-        // FC tag: prefer FcMemberCollector value, fallback to addon-read LastFcTag
-        var fcTag = FcMemberCollector.LastCollectedFcTag;
-        if (string.IsNullOrEmpty(fcTag) && !string.IsNullOrEmpty(LastFcTag))
-            fcTag = LastFcTag;
+        // A retained member page can still belong to the previous FC. The loaded
+        // local player's tag wins, even when it authoritatively becomes empty.
+        var fcTag = FreeCompanyIdentityPolicy.ResolveTag(proxy->Id, liveTag,
+            LastFcId, LastFcTag, FcMemberCollector.LastCollectedFcId, FcMemberCollector.LastCollectedFcTag);
+        if (liveTag != null) LastFcTag = fcTag;
 
         // Custom FC rank names: direct struct access remains untrusted until
         // runtime-verified under API 15, so addon/fallback rank naming stays preferred.
@@ -151,6 +179,8 @@ public static class FreeCompanyCollector
     /// </summary>
     public static void SeedPersistedValues(int fcPoints, string estate, string fcName = "", string fcTag = "", byte fcRank = 0, int fcGil = 0, bool fcGilObserved = false, ulong fcId = 0)
     {
+        if (fcId == 0) return;
+        EnsureFcOwner(fcId);
         if (LastFcPoints == 0 && fcPoints > 0)
             LastFcPoints = fcPoints;
         // Once chest gil has been observed this session, LastFcGil == 0 can be an authoritative
@@ -189,6 +219,7 @@ public static class FreeCompanyCollector
 
     public static void ClearPersistedValues()
     {
+        LastFcId = 0;
         LastCollectedRankNames = new Dictionary<int, string>();
         LastAddonMemberRanks = new Dictionary<string, string>();
         LastFcName = string.Empty;
@@ -242,6 +273,8 @@ public static class FreeCompanyCollector
     {
         try
         {
+            if (!TryGetCurrentFcId(out var fcId) || fcId == 0) return;
+            EnsureFcOwner(fcId);
             if (addonPtr == nint.Zero)
             {
                 services.Log.Debug("[XA] FreeCompany addon pointer is zero");
@@ -306,6 +339,8 @@ public static class FreeCompanyCollector
     {
         try
         {
+            if (!TryGetCurrentFcId(out var fcId) || fcId == 0) return;
+            EnsureFcOwner(fcId);
             if (addonPtr == nint.Zero)
             {
                 services.Log.Debug("[XA] FreeCompanyChest addon pointer is zero");
@@ -360,6 +395,10 @@ public static class FreeCompanyCollector
     {
         try
         {
+            if (!TryGetCurrentFcId(out var fcId) || fcId == 0) return;
+            EnsureFcOwner(fcId);
+            var members = InfoProxyFreeCompanyMember.Instance();
+            if (members == null || !FreeCompanyIdentityPolicy.CanReuse(fcId, members->FreeCompanyId)) return;
             var memberAddon = GetAddonByName("FreeCompanyMember");
             if (memberAddon == null || !memberAddon->IsVisible || !memberAddon->IsReady) return;
 
@@ -431,6 +470,8 @@ public static class FreeCompanyCollector
     {
         try
         {
+            if (!TryGetCurrentFcId(out var fcId) || fcId == 0) return;
+            EnsureFcOwner(fcId);
             if (addonPtr == nint.Zero)
             {
                 services.Log.Debug("[XA] HousingSignBoard addon pointer is zero");

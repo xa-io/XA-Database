@@ -969,6 +969,12 @@ public partial class MainWindow : Window, IDisposable
 
         try
         {
+            // The same character can change FC without logging out. Retire only
+            // FC-owned state before observing the new membership and its addons.
+            if (FreeCompanyCollector.TryGetCurrentFcId(out var observedFcId)
+                && FreeCompanyIdentityPolicy.ShouldReset(cachedFc?.FcId ?? 0, observedFcId,
+                    hasReliableLiveCharacterContext, localPlayer?.CompanyTag.TextValue.Trim()))
+                ClearPersistedFreeCompanyState();
             lastCollectorSectionStates.Clear();
             ApplyCollectedSection("Currencies", CurrencyCollector.CollectSection(plugin.Services), value => cachedCurrencies = value);
             ApplyCollectedSection("Jobs", JobCollector.CollectSection(plugin.Services), value => cachedJobs = value);
@@ -980,9 +986,15 @@ public partial class MainWindow : Window, IDisposable
             ApplyCollectedSection("Retainers", retainerSection, value => cachedRetainers = value);
             MergeActiveRetainerListings();
             MergeActiveRetainerInventory();
-            ApplyCollectedSection("FC members", FcMemberCollector.CollectSection(plugin.Services, plugin.ProtectOtherPlayerContentId), value => cachedFcMembers = value);
             var freeCompanySection = FreeCompanyCollector.CollectSection(plugin.Services, isOnHomeworld && hasReliableLiveCharacterContext);
+            if (freeCompanySection.CanReplacePersisted && (cachedFc?.FcId ?? 0) != (freeCompanySection.Value?.FcId ?? 0))
+            {
+                cachedFcMembers = new List<FcMemberEntry>();
+                cachedVoyages = null;
+                VoyageCollector.ClearPersistedValues();
+            }
             ApplyCollectedSection("Free company", freeCompanySection, value => cachedFc = value);
+            ApplyCollectedSection("FC members", FcMemberCollector.CollectSection(plugin.Services, plugin.ProtectOtherPlayerContentId), value => cachedFcMembers = value);
             ApplyCollectedSection("Squadron", SquadronCollector.CollectSection(plugin.Services), value => cachedSquadron = value);
 
             // Collect voyage data (only available inside FC workshop)
@@ -1052,14 +1064,13 @@ public partial class MainWindow : Window, IDisposable
                     ClearPersistedFreeCompanyState();
                 }
             }
-            else if (persistedSnapshot?.FreeCompany != null)
+            else if (persistedSnapshot?.FreeCompany != null
+                && FreeCompanyIdentityPolicy.CanReuse(cachedFc.FcId, persistedSnapshot.FreeCompany.FcId))
             {
                 var persistedFc = persistedSnapshot.FreeCompany;
-                if (cachedFc.FcId == 0 && persistedFc.FcId != 0)
-                    cachedFc.FcId = persistedFc.FcId;
                 if (string.IsNullOrEmpty(cachedFc.Name) && !string.IsNullOrEmpty(persistedFc.Name))
                     cachedFc.Name = persistedFc.Name;
-                if (string.IsNullOrEmpty(cachedFc.Tag) && !string.IsNullOrEmpty(persistedFc.Tag))
+                if (!hasReliableLiveCharacterContext && string.IsNullOrEmpty(cachedFc.Tag) && !string.IsNullOrEmpty(persistedFc.Tag))
                     cachedFc.Tag = persistedFc.Tag;
                 if (string.IsNullOrEmpty(cachedFc.Master) && !string.IsNullOrEmpty(persistedFc.Master))
                     cachedFc.Master = persistedFc.Master;
@@ -1099,13 +1110,14 @@ public partial class MainWindow : Window, IDisposable
                     cachedFc.Estate = FreeCompanyCollector.LastEstate;
                 if (string.IsNullOrEmpty(cachedFc.Name) && !string.IsNullOrEmpty(FreeCompanyCollector.LastFcName))
                     cachedFc.Name = FreeCompanyCollector.LastFcName;
-                if (string.IsNullOrEmpty(cachedFc.Tag) && !string.IsNullOrEmpty(FreeCompanyCollector.LastFcTag))
+                if (!hasReliableLiveCharacterContext && string.IsNullOrEmpty(cachedFc.Tag) && !string.IsNullOrEmpty(FreeCompanyCollector.LastFcTag))
                     cachedFc.Tag = FreeCompanyCollector.LastFcTag;
             }
 
             ApplyFreeCompanyGilOwnership(playerState.ContentId, playerState.CharacterName.ToString());
 
-            if (cachedFc != null && cachedFcMembers.Count == 0 && persistedSnapshot != null && persistedSnapshot.FcMembers.Count > 0)
+            if (cachedFc != null && cachedFcMembers.Count == 0 && persistedSnapshot != null && persistedSnapshot.FcMembers.Count > 0
+                && FreeCompanyIdentityPolicy.CanReuse(cachedFc.FcId, persistedSnapshot.FreeCompany?.FcId ?? 0))
             {
                 cachedFcMembers = persistedSnapshot.FcMembers.Select(member => new FcMemberEntry
                 {
@@ -1130,7 +1142,8 @@ public partial class MainWindow : Window, IDisposable
                 cachedSquadron = persistedSnapshot.Squadron;
 
             // Load persisted voyage data from DB if not in workshop
-            if (cachedVoyages == null && cachedFc != null && persistedSnapshot != null)
+            if (cachedVoyages == null && cachedFc != null && persistedSnapshot != null
+                && FreeCompanyIdentityPolicy.CanReuse(cachedFc.FcId, persistedSnapshot.FreeCompany?.FcId ?? 0))
                 cachedVoyages = persistedSnapshot.Voyages;
 
             // Personal housing: no DB fallback needed here — GetOwnedHouseId works from anywhere.
@@ -1420,7 +1433,8 @@ public partial class MainWindow : Window, IDisposable
                 cachedPersonalEstate = XaCharacterSnapshotRepository.PreferSizedPersonalEstateValue(cachedPersonalEstate, persistedSnapshot.Row.PersonalEstate);
             if (cachedFc == null && persistedSnapshot?.FreeCompany != null && (!isOnHomeworld || !hasReliableLiveCharacterContext))
                 cachedFc = persistedSnapshot.FreeCompany;
-            if (cachedFc != null && cachedFcMembers.Count == 0 && persistedSnapshot != null && persistedSnapshot.FcMembers.Count > 0)
+            if (cachedFc != null && cachedFcMembers.Count == 0 && persistedSnapshot != null && persistedSnapshot.FcMembers.Count > 0
+                && FreeCompanyIdentityPolicy.CanReuse(cachedFc.FcId, persistedSnapshot.FreeCompany?.FcId ?? 0))
                 cachedFcMembers = persistedSnapshot.FcMembers;
             ApplyFcMemberRankNames(persistedSnapshot);
             if (isOnHomeworld && cachedFc == null && hasReliableLiveCharacterContext)

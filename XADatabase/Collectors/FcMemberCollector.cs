@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using FFXIVClientStructs.FFXIV.Client.UI.Info;
 using Lumina.Excel.Sheets;
 using XADatabase.Core.Collection;
+using XADatabase.Core.Policies;
 using XADatabase.Models;
 using XADatabase.Services;
 
@@ -16,8 +17,12 @@ public static class FcMemberCollector
     {
         try
         {
+            ClearPersistedValues();
             var proxy = InfoProxyFreeCompanyMember.Instance();
-            if (proxy == null || proxy->GetEntryCount() == 0)
+            if (proxy == null || !FreeCompanyCollector.TryGetCurrentFcId(out var fcId)
+                || !FreeCompanyIdentityPolicy.CanReuse(fcId, proxy->FreeCompanyId))
+                return SectionResult<List<FcMemberEntry>>.Unavailable([], "FC member list belongs to an unknown or different free company");
+            if (proxy->GetEntryCount() == 0)
                 return SectionResult<List<FcMemberEntry>>.Unavailable([], "FC member list is not loaded");
 
             var value = Collect(services, protectContentId);
@@ -37,10 +42,12 @@ public static class FcMemberCollector
     /// Set after Collect() runs successfully.
     /// </summary>
     public static string LastCollectedFcTag { get; private set; } = string.Empty;
+    public static ulong LastCollectedFcId { get; private set; }
 
     public static void ClearPersistedValues()
     {
         LastCollectedFcTag = string.Empty;
+        LastCollectedFcId = 0;
     }
 
     /// <summary>
@@ -53,9 +60,11 @@ public static class FcMemberCollector
         Func<ulong, ulong> protectContentId)
     {
         var results = new List<FcMemberEntry>();
+        ClearPersistedValues();
 
         var proxy = InfoProxyFreeCompanyMember.Instance();
-        if (proxy == null)
+        if (proxy == null || !FreeCompanyCollector.TryGetCurrentFcId(out var fcId)
+            || !FreeCompanyIdentityPolicy.CanReuse(fcId, proxy->FreeCompanyId))
             return results;
 
         var count = proxy->GetEntryCount();
@@ -66,7 +75,7 @@ public static class FcMemberCollector
         var worldSheet = services.DataManager.GetExcelSheet<World>();
 
         // Grab FC tag from first entry
-        LastCollectedFcTag = string.Empty;
+        LastCollectedFcId = fcId;
         try
         {
             var firstEntry = proxy->GetEntry(0);
