@@ -56,10 +56,11 @@ public partial class MainWindow
             return;
         }
 
+        var displayedJobs = JobAvailability.Project(cachedJobs);
         foreach (var (leftCat, rightCat) in JobPairs)
         {
-            var leftJobs = leftCat != null ? cachedJobs.Where(j => j.Category == leftCat).ToList() : new List<JobEntry>();
-            var rightJobs = rightCat != null ? cachedJobs.Where(j => j.Category == rightCat).ToList() : new List<JobEntry>();
+            var leftJobs = leftCat != null ? displayedJobs.Where(j => j.Category == leftCat).ToList() : new List<JobDisplayEntry>();
+            var rightJobs = rightCat != null ? displayedJobs.Where(j => j.Category == rightCat).ToList() : new List<JobDisplayEntry>();
             var maxRows = Math.Max(leftJobs.Count, rightJobs.Count);
             if (maxRows == 0) continue;
 
@@ -81,7 +82,7 @@ public partial class MainWindow
         }
     }
 
-    private void DrawJobRoleGroup(string category, List<JobEntry> jobs)
+    private void DrawJobRoleGroup(string category, List<JobDisplayEntry> jobs)
     {
         // Role header with icon-like prefix
         var headerColor = category switch
@@ -111,25 +112,52 @@ public partial class MainWindow
 
         foreach (var job in jobs)
         {
-            // Job row: name + level right-aligned
-            if (job.IsUnlocked)
+            // Include the current table column's offset when positioning the level.
+            var rowStartX = ImGui.GetCursorPosX();
+            var rowWidth = ImGui.GetContentRegionAvail().X;
+            var levelText = job.IsAvailable
+                ? $"{job.Level}{(job.IsUnknown ? "?" : string.Empty)}"
+                : job.IsUnknown ? "?" : "-";
+            if (job.IsAvailable)
             {
                 ImGui.Text($"  {job.Name}");
-                ImGui.SameLine(ImGui.GetContentRegionAvail().X - Scale(30f));
-                if (JobLevelCaps.IsAtCap(job) || job.Level >= 100)
-                    ImGui.TextColored(new Vector4(0.3f, 1.0f, 0.5f, 1.0f), $"{job.Level}");
-                else
-                    ImGui.Text($"{job.Level}");
             }
             else
             {
                 ImGui.TextDisabled($"  {job.Name}");
-                ImGui.SameLine(ImGui.GetContentRegionAvail().X - Scale(30f));
-                ImGui.TextDisabled("-");
             }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(GetJobAvailabilityTooltip(job));
+
+            var levelX = rowStartX + MathF.Max(0f, rowWidth - ImGui.CalcTextSize(levelText).X - Scale(8f));
+            ImGui.SameLine();
+            ImGui.SetCursorPosX(levelX);
+            var levelCap = job.LevelCap > 0 ? job.LevelCap : JobLevelCaps.ForAbbreviation(job.Abbreviation);
+            if (!job.IsAvailable)
+                ImGui.TextDisabled(levelText);
+            else if (levelCap > 0 && job.Level >= levelCap)
+                ImGui.TextColored(new Vector4(0.3f, 1.0f, 0.5f, 1.0f), levelText);
+            else
+                ImGui.Text(levelText);
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(GetJobAvailabilityTooltip(job));
         }
 
         ImGui.Spacing();
+    }
+
+    private static string GetJobAvailabilityTooltip(JobDisplayEntry job)
+    {
+        var label = job.IsAvailable ? $"{job.Name} - Level {job.Level}" : job.Name;
+        if (job.IsUnknown)
+            return $"{label}\nSoul crystal ownership is not confirmed by a complete inventory capture. Refresh while logged in to this character.";
+        if (job.IsBaseClass)
+            return $"{label}\nThe {job.CanonicalAbbreviation} soul crystal was not found in this character's bags, crystal armoury or equipped items.";
+        if (job.UnlockEvidence == JobUnlockEvidence.CrystalObserved)
+            return $"{label}\nSoul crystal observed in this character's inventory or equipped items.";
+        if (job.UnlockEvidence == JobUnlockEvidence.CrystalAbsent)
+            return $"{label}\nSoul crystal not found. Job is not unlocked.";
+        return job.IsAvailable ? label : $"{label}\nClass is not unlocked.";
     }
 
 }

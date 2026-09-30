@@ -560,17 +560,26 @@ public partial class MainWindow : Window, IDisposable
     private AccountCharacterListIpcCharacter BuildAccountCharacterListRow(XaCharacterRosterData snapshot)
     {
         var rowIdsByAbbreviation = GetClassJobRowIdsByAbbreviation();
-        var jobRows = snapshot.Jobs
-            .Where(static job => job.IsUnlocked || job.Level > 0)
+        var saved = plugin.Snapshots.Get(snapshot.ContentId);
+        var resolvedJobs = saved != null ? ResolveStoredJobs(saved) :
+            JobCollector.ResolveSavedJobs(plugin.Services.DataManager, snapshot.Jobs, [], snapshot.ContentId);
+        var jobRows = JobAvailability.Project(resolvedJobs)
+            .Where(static job => job.IsAvailable)
             .Select(job => new AccountCharacterListIpcJob
             {
-                JobId = rowIdsByAbbreviation.TryGetValue(job.Abbreviation.Trim(), out var rowId) ? rowId : 0,
+                JobId = job.ClassJobId != 0 ? job.ClassJobId :
+                    rowIdsByAbbreviation.TryGetValue(job.Abbreviation.Trim(), out var rowId) ? rowId : 0,
                 JobAbbrev = job.Abbreviation,
                 JobName = job.Name,
                 Category = job.Category,
                 Level = job.Level,
                 LevelCap = job.LevelCap,
-                IsUnlocked = job.IsUnlocked,
+                IsUnlocked = job.IsAvailable,
+                CanonicalJobId = job.CanonicalClassJobId,
+                CanonicalJobAbbrev = job.CanonicalAbbreviation,
+                IsJobUnlocked = job.IsJobUnlocked,
+                UnlockEvidence = job.UnlockEvidence.ToString(),
+                IsUnknown = job.IsUnknown,
             })
             .OrderBy(static job => job.JobId == 0 ? uint.MaxValue : job.JobId)
             .ThenBy(static job => job.JobAbbrev, StringComparer.OrdinalIgnoreCase)
@@ -977,7 +986,6 @@ public partial class MainWindow : Window, IDisposable
                 ClearPersistedFreeCompanyState();
             lastCollectorSectionStates.Clear();
             ApplyCollectedSection("Currencies", CurrencyCollector.CollectSection(plugin.Services), value => cachedCurrencies = value);
-            ApplyCollectedSection("Jobs", JobCollector.CollectSection(plugin.Services), value => cachedJobs = value);
             ApplyInventoryCapture(ItemCollector.CollectSection(plugin.Services));
             // Retainers: only overwrite if live collector returns data (requires summoning bell)
             var retainerSection = RetainerCollector.CollectRetainerListSection(plugin.Services, playerState.ContentId);
@@ -2567,4 +2575,9 @@ internal sealed class AccountCharacterListIpcJob
     public int Level { get; set; }
     public int LevelCap { get; set; }
     public bool IsUnlocked { get; set; }
+    public uint CanonicalJobId { get; set; }
+    public string CanonicalJobAbbrev { get; set; } = string.Empty;
+    public bool IsJobUnlocked { get; set; }
+    public string UnlockEvidence { get; set; } = string.Empty;
+    public bool IsUnknown { get; set; }
 }

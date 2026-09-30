@@ -19,6 +19,10 @@ public partial class MainWindow
             cachedItems, value.Items, readable, item => item.ContainerName));
         ApplyCollectedSection("Inventory summaries", InventoryCollector.CollectSection(plugin.Services, items),
             value => cachedInventory = InventoryContainerMerge.Merge(cachedInventory, value, readable, summary => summary.Name));
+        // Resolve from this observation, never from merged stale container contents.
+        // This path also runs for item events before an immediate logout/IPC save.
+        ApplyCollectedSection("Jobs", JobCollector.CollectSection(plugin.Services, items.Value, cachedJobs),
+            value => cachedJobs = value);
     }
 
     public void CaptureLiveInventory(bool saddlebagClosing = false)

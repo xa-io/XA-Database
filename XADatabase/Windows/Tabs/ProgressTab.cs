@@ -190,7 +190,7 @@ public partial class MainWindow
         public long Gil, RetainerGil, FcChestGil, MarketValue;
         public int Retainers, Listings, VenturesReady, LeveAllowances;
         public ulong ContentId;
-        public Dictionary<string, int> JobLevels;
+        public Dictionary<string, JobDisplayEntry> Jobs;
     }
 
     // Job abbreviations for dashboard columns — matches in-game order
@@ -199,7 +199,7 @@ public partial class MainWindow
         "WHM", "SCH", "AST", "SGE",
         "MNK", "DRG", "NIN", "SAM", "RPR", "VPR", "BST",
         "BRD", "MCH", "DNC",
-        "BLM", "SMN", "RDM", "PCT",
+        "BLM", "SMN", "RDM", "PCT", "BLU",
         "CRP", "BSM", "ARM", "GSM", "LTW", "WVR", "ALC", "CUL",
         "MIN", "BTN", "FSH",
     };

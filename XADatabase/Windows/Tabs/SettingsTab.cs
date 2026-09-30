@@ -323,7 +323,7 @@ public partial class MainWindow
 
                 // Collect all character data for master CSVs
                 var allCurr = new List<(string Name, string World, List<CurrencyEntry> Data)>();
-                var allJobs = new List<(string Name, string World, List<JobEntry> Data)>();
+                var allJobs = new List<(string Name, string World, List<JobDisplayEntry> Data)>();
                 var allInv = new List<(string Name, string World, List<InventorySummary> Data)>();
                 var allItems = new List<(string Name, string World, List<ContainerItemEntry> Data)>();
                 var allRet = new List<(string Name, string World, List<RetainerEntry> Data)>();
@@ -338,7 +338,8 @@ public partial class MainWindow
                         continue;
 
                     allCurr.Add((snapshot.Row.CharacterName, snapshot.Row.World, snapshot.Currencies));
-                    allJobs.Add((snapshot.Row.CharacterName, snapshot.Row.World, snapshot.Jobs));
+                    allJobs.Add((snapshot.Row.CharacterName, snapshot.Row.World,
+                        JobAvailability.Project(ResolveStoredJobs(snapshot))));
                     allInv.Add((snapshot.Row.CharacterName, snapshot.Row.World, snapshot.InventorySummaries));
                     allItems.Add((snapshot.Row.CharacterName, snapshot.Row.World, snapshot.AllItems));
                     allRet.Add((snapshot.Row.CharacterName, snapshot.Row.World, snapshot.Retainers));
@@ -350,7 +351,7 @@ public partial class MainWindow
                 ExportService.WriteExport(basePath, "all_characters", "currencies.csv",
                     ExportService.BuildMasterCsv("Category,Name,Amount,Cap", allCurr, ExportService.FmtCurrency));
                 ExportService.WriteExport(basePath, "all_characters", "jobs.csv",
-                    ExportService.BuildMasterCsv("Abbreviation,Name,Category,Level,LevelCap,IsUnlocked", allJobs, ExportService.FmtJob));
+                    ExportService.BuildMasterCsv(ExportService.JobsCsvHeader, allJobs, ExportService.FmtJob));
                 ExportService.WriteExport(basePath, "all_characters", "inventory.csv",
                     ExportService.BuildMasterCsv("Container,UsedSlots,TotalSlots", allInv, ExportService.FmtInventory));
                 ExportService.WriteExport(basePath, "all_characters", "items.csv",

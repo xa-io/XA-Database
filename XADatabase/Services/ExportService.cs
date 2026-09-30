@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -11,6 +12,8 @@ namespace XADatabase.Services;
 
 public static class ExportService
 {
+    public const string JobsCsvHeader = "Abbreviation,Name,Category,Level,LevelCap,IsUnlocked,ClassJobId,CanonicalClassJobId,CanonicalAbbreviation,IsJobUnlocked,UnlockEvidence,IsUnknown";
+
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         WriteIndented = true,
@@ -40,9 +43,9 @@ public static class ExportService
     public static string ExportJobsCsv(List<JobEntry> data)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("Abbreviation,Name,Category,Level,LevelCap,IsUnlocked");
-        foreach (var j in data)
-            sb.AppendLine($"{CsvEscape(j.Abbreviation)},{CsvEscape(j.Name)},{CsvEscape(j.Category)},{j.Level},{j.LevelCap},{j.IsUnlocked}");
+        sb.AppendLine(JobsCsvHeader);
+        foreach (var job in JobAvailability.Project(data))
+            sb.AppendLine(FmtJob(job));
         return sb.ToString();
     }
 
@@ -120,7 +123,8 @@ public static class ExportService
 
     // Row formatters for master CSV
     public static string FmtCurrency(CurrencyEntry c) => $"{CsvEscape(c.Category)},{CsvEscape(c.Name)},{c.Amount},{c.Cap}";
-    public static string FmtJob(JobEntry j) => $"{CsvEscape(j.Abbreviation)},{CsvEscape(j.Name)},{CsvEscape(j.Category)},{j.Level},{j.LevelCap},{j.IsUnlocked}";
+    public static string FmtJob(JobEntry job) => FmtJob(JobAvailability.GetDisplay(job));
+    public static string FmtJob(JobDisplayEntry job) => $"{CsvEscape(job.Abbreviation)},{CsvEscape(job.Name)},{CsvEscape(job.Category)},{job.Level},{job.LevelCap},{job.IsAvailable},{job.ClassJobId},{job.CanonicalClassJobId},{CsvEscape(job.CanonicalAbbreviation)},{job.IsJobUnlocked},{job.UnlockEvidence},{job.IsUnknown}";
     public static string FmtInventory(InventorySummary i) => $"{CsvEscape(i.Name)},{i.UsedSlots},{i.TotalSlots}";
     public static string FmtItem(ContainerItemEntry i) => $"{CsvEscape(i.ContainerName)},{CsvEscape(i.ItemName)},{i.ItemId},{i.Quantity},{i.IsHq},{i.SlotIndex}";
     public static string FmtRetainer(RetainerEntry r) => $"{CsvEscape(r.Name)},{r.Level},{r.Gil},{r.ItemCount},{r.MarketItemCount},{CsvEscape(r.Town)},{CsvEscape(r.VentureStatus)},{CsvEscape(r.VentureEta)}";
@@ -146,12 +150,28 @@ public static class ExportService
     {
         var snapshot = new Dictionary<string, object?>
         {
-            ["export_version"] = "1.0",
+            // 1.1 retains the original job fields and adds canonical identity and
+            // crystal evidence; display names and IsUnlocked describe the resolved class/job.
+            ["export_version"] = "1.1",
             ["exported_utc"] = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"),
             ["character"] = characterName,
             ["world"] = world,
             ["currencies"] = currencies,
-            ["jobs"] = jobs,
+            ["jobs"] = JobAvailability.Project(jobs).Select(job => new
+            {
+                job.Abbreviation,
+                job.Name,
+                job.Category,
+                job.Level,
+                job.LevelCap,
+                IsUnlocked = job.IsAvailable,
+                job.ClassJobId,
+                job.CanonicalClassJobId,
+                job.CanonicalAbbreviation,
+                job.IsJobUnlocked,
+                UnlockEvidence = job.UnlockEvidence.ToString(),
+                job.IsUnknown,
+            }).ToList(),
             ["inventory"] = inventory,
             ["items"] = items,
             ["retainers"] = retainers,

@@ -693,15 +693,13 @@ public sealed class XaCharacterSnapshotRepository
             var levelCap = JobLevelCaps.ForAbbreviation(
                 abbreviation,
                 job.LevelCap > 0 ? job.LevelCap : JobLevelCaps.Default);
-            return new JobEntry
-            {
-                Abbreviation = abbreviation,
-                Name = NormalizeUpper(job.Name),
-                Category = job.Category,
-                Level = job.Level,
-                LevelCap = levelCap,
-                IsUnlocked = job.IsUnlocked,
-            };
+            var normalized = JobAvailability.Normalize(job);
+            normalized.Abbreviation = abbreviation;
+            normalized.Name = NormalizeUpper(job.Name);
+            normalized.ParentAbbreviation = NormalizeUpper(job.ParentAbbreviation);
+            normalized.ParentName = NormalizeUpper(job.ParentName);
+            normalized.LevelCap = levelCap;
+            return normalized;
         }).ToList();
     }
 

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using XADatabase.Collectors;
 using XADatabase.Core.Collection;
 using XADatabase.Core.Policies;
@@ -24,6 +25,7 @@ public partial class MainWindow
     private readonly HashSet<ulong> liveSessionRetainerInventoryIds = new();
     private bool hasAuthoritativeLiveRetainerList;
     private CharacterCacheState? retainedLiveCharacterCache;
+    private readonly ConditionalWeakTable<XaCharacterSnapshotData, List<JobEntry>> storedJobResolutions = new();
 
     private void ApplySnapshotToCache(XaCharacterSnapshotData snapshot)
     {
@@ -31,7 +33,7 @@ public partial class MainWindow
         cacheOwnerCharacterName = snapshot.Row.CharacterName;
         cachedCurrencies = snapshot.Currencies;
         JournalCollector.SeedPersistedValue(snapshot.Currencies);
-        cachedJobs = snapshot.Jobs;
+        cachedJobs = ResolveStoredJobs(snapshot);
         cachedInventory = snapshot.InventorySummaries;
         cachedItems = snapshot.AllItems;
         cachedRetainers = snapshot.Retainers;
@@ -59,6 +61,10 @@ public partial class MainWindow
             FreeCompanyCollector.SeedPersistedValues(cachedFc.FcPoints, cachedFc.Estate, cachedFc.Name, cachedFc.Tag, cachedFc.Rank, cachedFc.FcGil, cachedFc.FcGilObserved, cachedFc.FcId);
         }
     }
+
+    private List<JobEntry> ResolveStoredJobs(XaCharacterSnapshotData snapshot)
+        => storedJobResolutions.GetValue(snapshot, value => JobCollector.ResolveSavedJobs(
+            plugin.Services.DataManager, value.Jobs, value.AllItems, value.Row.ContentId));
 
     private void ResetCharacterScopedCache()
     {

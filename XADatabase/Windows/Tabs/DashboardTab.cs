@@ -84,11 +84,11 @@ public partial class MainWindow
             totalVenturesReady += venturesReady;
             totalLeveAllowances += JournalCollector.GetLeveAllowances(snapshot.Currencies) ?? 0;
 
-            var jobDict = new Dictionary<string, int>();
-            foreach (var j in snapshot.Jobs)
+            var jobDict = new Dictionary<string, JobDisplayEntry>(StringComparer.OrdinalIgnoreCase);
+            foreach (var job in JobAvailability.Project(ResolveStoredJobs(snapshot)))
             {
-                if (!string.IsNullOrEmpty(j.Abbreviation))
-                    jobDict[j.Abbreviation.ToUpperInvariant()] = j.Level;
+                if (!string.IsNullOrEmpty(job.CanonicalAbbreviation))
+                    jobDict[job.CanonicalAbbreviation] = job;
             }
 
             rows.Add(new DashRow
@@ -98,7 +98,7 @@ public partial class MainWindow
                 Listings = snapshot.Listings.Count, VenturesReady = venturesReady,
                 LeveAllowances = JournalCollector.GetLeveAllowances(snapshot.Currencies) ?? 0,
                 FcName = snapshot.FreeCompany?.Name ?? snapshot.Row.FcName ?? "-", LastSeen = snapshot.Row.UpdatedUtc,
-                ContentId = ch.ContentId, JobLevels = jobDict,
+                ContentId = ch.ContentId, Jobs = jobDict,
             });
         }
 
@@ -130,7 +130,7 @@ public partial class MainWindow
                 ImGui.TableSetupColumn("FC", ImGuiTableColumnFlags.WidthFixed, Scale(120f));
                 ImGui.TableSetupColumn("Last Seen", ImGuiTableColumnFlags.WidthFixed, Scale(130f));
                 foreach (var job in DashJobAbbrevs)
-                    ImGui.TableSetupColumn(job, ImGuiTableColumnFlags.WidthFixed, Scale(28f));
+                    ImGui.TableSetupColumn(job, ImGuiTableColumnFlags.WidthFixed, Scale(68f));
                 ImGui.TableSetupScrollFreeze(1, 1);
                 ImGui.TableHeadersRow();
 
@@ -151,8 +151,8 @@ public partial class MainWindow
                             if (col >= 14 && col < 14 + DashJobAbbrevs.Length)
                             {
                                 var jobName = DashJobAbbrevs[col - 14];
-                                var aLv = a.JobLevels != null && a.JobLevels.TryGetValue(jobName, out var av) ? av : 0;
-                                var bLv = b.JobLevels != null && b.JobLevels.TryGetValue(jobName, out var bv) ? bv : 0;
+                                var aLv = a.Jobs != null && a.Jobs.TryGetValue(jobName, out var av) && av.IsAvailable ? av.Level : 0;
+                                var bLv = b.Jobs != null && b.Jobs.TryGetValue(jobName, out var bv) && bv.IsAvailable ? bv.Level : 0;
                                 cmp = aLv.CompareTo(bLv);
                             }
                             else
@@ -258,14 +258,24 @@ public partial class MainWindow
                     foreach (var job in DashJobAbbrevs)
                     {
                         ImGui.TableNextColumn();
-                        var lv = row.JobLevels != null && row.JobLevels.TryGetValue(job, out var v) ? v : 0;
-                        var levelCap = JobLevelCaps.ForAbbreviation(job);
-                        if ((levelCap > 0 && lv >= levelCap) || lv >= 100)
-                            ImGui.TextColored(new Vector4(1.0f, 0.85f, 0.0f, 1.0f), $"{lv}");
-                        else if (lv > 0)
-                            ImGui.Text($"{lv}");
-                        else
+                        if (row.Jobs == null || !row.Jobs.TryGetValue(job, out var displayed))
+                        {
                             ImGui.TextDisabled("-");
+                            continue;
+                        }
+
+                        var levelText = displayed.IsAvailable
+                            ? $"{(displayed.IsBaseClass ? displayed.Abbreviation + " " : string.Empty)}{displayed.Level}{(displayed.IsUnknown ? "?" : string.Empty)}"
+                            : displayed.IsUnknown ? "?" : "-";
+                        var levelCap = displayed.LevelCap > 0 ? displayed.LevelCap : JobLevelCaps.ForAbbreviation(job);
+                        if (!displayed.IsAvailable)
+                            ImGui.TextDisabled(levelText);
+                        else if (levelCap > 0 && displayed.Level >= levelCap)
+                            ImGui.TextColored(new Vector4(1.0f, 0.85f, 0.0f, 1.0f), levelText);
+                        else
+                            ImGui.Text(levelText);
+                        if (ImGui.IsItemHovered())
+                            ImGui.SetTooltip(GetJobAvailabilityTooltip(displayed));
                     }
                 }
 
