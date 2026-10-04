@@ -6,7 +6,7 @@ using XADatabase.Core.Policies;
 
 namespace XADatabase.Services;
 
-/// <summary>Registers and contains the 21 XA.Database.* IPC contract channels.</summary>
+/// <summary>Registers and contains the 25 XA.Database.* IPC contract channels.</summary>
 public sealed class IpcProvider : IDisposable
 {
     private readonly IPluginLog log;
@@ -14,7 +14,7 @@ public sealed class IpcProvider : IDisposable
     private readonly IpcRegistrationCleanup registrations = new();
     private readonly object lifecycleGate = new();
     private bool initialized;
-    private bool disposed;
+    private volatile bool disposed;
 
     private readonly ICallGateProvider<object> saveProvider;
     private readonly ICallGateProvider<object> refreshProvider;
@@ -37,6 +37,10 @@ public sealed class IpcProvider : IDisposable
     private readonly ICallGateProvider<string, string> searchItemsProvider;
     private readonly ICallGateProvider<string, string> getMatchingCharactersForItemsProvider;
     private readonly ICallGateProvider<string, string> searchCurrentCharacterItemsJsonProvider;
+    private readonly ICallGateProvider<ulong, string> getCharacterAetherytesJsonProvider;
+    private readonly ICallGateProvider<string> getAllCharacterAetherytesJsonProvider;
+    private readonly ICallGateProvider<uint, bool> hasAetheryteProvider;
+    private readonly ICallGateProvider<ulong, uint, bool> characterHasAetheryteProvider;
 
     public IpcProvider(IDalamudPluginInterface pluginInterface, IPluginLog log, IFramework framework)
     {
@@ -63,6 +67,10 @@ public sealed class IpcProvider : IDisposable
         searchItemsProvider = pluginInterface.GetIpcProvider<string, string>(IpcContractInfo.SearchItems);
         getMatchingCharactersForItemsProvider = pluginInterface.GetIpcProvider<string, string>(IpcContractInfo.GetMatchingCharactersForItems);
         searchCurrentCharacterItemsJsonProvider = pluginInterface.GetIpcProvider<string, string>(IpcContractInfo.SearchCurrentCharacterItemsJson);
+        getCharacterAetherytesJsonProvider = pluginInterface.GetIpcProvider<ulong, string>(IpcContractInfo.GetCharacterAetherytesJson);
+        getAllCharacterAetherytesJsonProvider = pluginInterface.GetIpcProvider<string>(IpcContractInfo.GetAllCharacterAetherytesJson);
+        hasAetheryteProvider = pluginInterface.GetIpcProvider<uint, bool>(IpcContractInfo.HasAetheryte);
+        characterHasAetheryteProvider = pluginInterface.GetIpcProvider<ulong, uint, bool>(IpcContractInfo.CharacterHasAetheryte);
     }
 
     public void Initialize(IpcFacade facade)
@@ -106,6 +114,10 @@ public sealed class IpcProvider : IDisposable
                 Register(searchItemsProvider, IpcContractInfo.SearchItems, facade.SearchItems, string.Empty);
                 Register(getMatchingCharactersForItemsProvider, IpcContractInfo.GetMatchingCharactersForItems, facade.GetMatchingCharactersForItems, string.Empty);
                 Register(searchCurrentCharacterItemsJsonProvider, IpcContractInfo.SearchCurrentCharacterItemsJson, facade.SearchCurrentCharacterItemsJson, string.Empty);
+                Register(getCharacterAetherytesJsonProvider, IpcContractInfo.GetCharacterAetherytesJson, facade.GetCharacterAetherytesJson, string.Empty);
+                Register(getAllCharacterAetherytesJsonProvider, IpcContractInfo.GetAllCharacterAetherytesJson, facade.GetAllCharacterAetherytesJson, string.Empty);
+                Register(hasAetheryteProvider, IpcContractInfo.HasAetheryte, facade.HasAetheryte, false);
+                Register(characterHasAetheryteProvider, IpcContractInfo.CharacterHasAetheryte, facade.CharacterHasAetheryte, false);
                 initialized = true;
                 log.Information($"[XA] IPC handlers initialized ({IpcContractInfo.ChannelCount} channels, contract v{IpcContractInfo.CurrentVersion}).");
             }
@@ -146,6 +158,16 @@ public sealed class IpcProvider : IDisposable
         registrations.Add(channel, provider.UnregisterFunc);
     }
 
+    private void Register<TArg1, TArg2, TResult>(
+        ICallGateProvider<TArg1, TArg2, TResult> provider,
+        string channel,
+        Func<TArg1, TArg2, TResult> function,
+        TResult fallback)
+    {
+        provider.RegisterFunc((first, second) => RunSafe(channel, () => function(first, second), fallback));
+        registrations.Add(channel, provider.UnregisterFunc);
+    }
+
     private void RunSafe(string channel, Action action)
         => IpcInvocationPolicy.RunSafe(
             channel,
@@ -155,7 +177,17 @@ public sealed class IpcProvider : IDisposable
     private T RunSafe<T>(string channel, Func<T> function, T fallback)
         => IpcInvocationPolicy.RunSafe(
             channel,
-            () => framework.RunOnFrameworkThread(function).GetAwaiter().GetResult(),
+            () =>
+            {
+                if (disposed || registrations.IsDisposed || framework.IsFrameworkUnloading)
+                    return fallback;
+
+                // A queued query may reach the framework after disposal starts.
+                return framework.RunOnFrameworkThread(() =>
+                    disposed || registrations.IsDisposed || framework.IsFrameworkUnloading
+                        ? fallback
+                        : function()).GetAwaiter().GetResult();
+            },
             fallback,
             ReportInvocationFailure);
 

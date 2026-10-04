@@ -263,6 +263,9 @@ public partial class MainWindow
         ImGui.Spacing();
 
         var charLabel = viewingContentId.HasValue ? viewingCharName : "Current Character";
+        var exportCharacter = knownCharacters.Find(character => character.ContentId == (viewingContentId ?? cacheOwnerContentId));
+        var exportName = exportCharacter?.Name ?? cacheOwnerCharacterName;
+        var exportWorld = exportCharacter?.World ?? (viewingContentId.HasValue ? string.Empty : ResolveCurrentHomeWorldName());
         var deleteModifierHeld = IsDeleteModifierHeld();
         var hasDeleteTarget = TryGetCurrentDeleteTarget(out var deleteTargetContentId, out var deleteTargetLabel);
 
@@ -279,6 +282,8 @@ public partial class MainWindow
                 ExportService.WriteExport(basePath, charLabel, "listings.csv", ExportService.ExportListingsCsv(cachedListings));
                 ExportService.WriteExport(basePath, charLabel, "collections.csv", ExportService.ExportCollectionsCsv(cachedCollections));
                 ExportService.WriteExport(basePath, charLabel, "quests.csv", ExportService.ExportQuestsCsv(cachedQuests));
+                ExportService.WriteExport(basePath, charLabel, "aetherytes.csv", ExportService.ExportAetherytesCsv(
+                    new[] { (exportName, exportWorld, cachedAetherytes) }));
                 SetExportStatus($"CSV exported for {charLabel}");
             }
             catch (Exception ex)
@@ -295,13 +300,11 @@ public partial class MainWindow
             try
             {
                 var basePath = plugin.DatabaseService.GetDbDirectory();
-                var worldName = "Unknown";
-                try { worldName = plugin.Services.PlayerState.HomeWorld.Value.Name.ToString(); } catch { }
                 var json = ExportService.ExportFullJson(
-                    charLabel, worldName,
+                    exportName, exportWorld,
                     cachedCurrencies, cachedJobs, cachedInventory, cachedItems,
                     cachedRetainers, cachedListings, cachedRetainerItems,
-                    cachedFc, cachedCollections, cachedQuests);
+                    cachedFc, cachedCollections, cachedQuests, cachedAetherytes);
                 ExportService.WriteExport(basePath, charLabel, "snapshot.json", json);
                 SetExportStatus($"JSON exported for {charLabel}");
             }
@@ -330,6 +333,7 @@ public partial class MainWindow
                 var allList = new List<(string Name, string World, List<RetainerListingEntry> Data)>();
                 var allColl = new List<(string Name, string World, List<CollectionSummary> Data)>();
                 var allQuest = new List<(string Name, string World, List<ActiveQuestEntry> Data)>();
+                var allAetherytes = new List<(string Name, string World, AetheryteSnapshot Snapshot)>();
 
                 foreach (var ch in chars)
                 {
@@ -346,6 +350,7 @@ public partial class MainWindow
                     allList.Add((snapshot.Row.CharacterName, snapshot.Row.World, snapshot.Listings));
                     allColl.Add((snapshot.Row.CharacterName, snapshot.Row.World, snapshot.Collections));
                     allQuest.Add((snapshot.Row.CharacterName, snapshot.Row.World, snapshot.ActiveQuests));
+                    allAetherytes.Add((snapshot.Row.CharacterName, snapshot.Row.World, snapshot.Aetherytes));
                 }
 
                 ExportService.WriteExport(basePath, "all_characters", "currencies.csv",
@@ -364,6 +369,8 @@ public partial class MainWindow
                     ExportService.BuildMasterCsv("Category,Unlocked,Total,Percent", allColl, ExportService.FmtCollection));
                 ExportService.WriteExport(basePath, "all_characters", "quests.csv",
                     ExportService.BuildMasterCsv("QuestId,Name,Sequence", allQuest, ExportService.FmtQuest));
+                ExportService.WriteExport(basePath, "all_characters", "aetherytes.csv",
+                    ExportService.ExportAetherytesCsv(allAetherytes));
 
                 SetExportStatus($"Master CSV exported for {chars.Count} characters");
             }

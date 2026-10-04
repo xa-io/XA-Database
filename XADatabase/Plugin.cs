@@ -280,6 +280,7 @@ public sealed class Plugin : IDalamudPlugin
             MainWindow.IsOpen = true;
         lifecycleSchedule.MarkLogin();
         MainWindow.ClearPendingCaptureAndSave();
+        MainWindow.BeginCharacterSession();
     }
 
     private void OnInventoryChanged(IReadOnlyCollection<InventoryEventArgs> events)
@@ -365,5 +366,5 @@ public sealed class Plugin : IDalamudPlugin
 
 internal static class BuildInfo
 {
-    public const string Version = "0.0.0.44";
+    public const string Version = "0.0.0.45";
 }

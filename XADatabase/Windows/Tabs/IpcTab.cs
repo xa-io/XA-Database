@@ -89,10 +89,16 @@ public partial class MainWindow
             DrawIpcRow("XA.Database.SearchItems", "string", "Cross-character item search (takes query string, returns pipe-delimited results)");
             DrawIpcRow("XA.Database.GetMatchingCharactersForItems", "string", "Exact item-key match (takes comma/newline itemId:isHq keys, returns Character@World lines)");
             DrawIpcRow("XA.Database.SearchCurrentCharacterItemsJson", "string", "Current-character scoped JSON item search for automation consumers");
+            DrawIpcRow("XA.Database.GetCharacterAetherytesJson", "string", "Takes ulong contentId (0 = current live character); returns latest aetheryte JSON with known/capturedUtc");
+            DrawIpcRow("XA.Database.GetAllCharacterAetherytesJson", "string", "Returns latest aetheryte JSON for all visible saved characters and the current live owner");
+            DrawIpcRow("XA.Database.HasAetheryte", "bool", "Takes uint aetheryteId; checks the current live owner's latest known list, independent of the selected UI character");
+            DrawIpcRow("XA.Database.CharacterHasAetheryte", "bool", "Takes ulong contentId, uint aetheryteId (contentId 0 = current); true when that ID exists in the latest known list");
 
             ImGui.EndTable();
         }
 
+        ImGui.Spacing();
+        ImGui.TextWrapped("Aetheryte queries read the last observation; they do not refresh or teleport. False also means unknown, not captured, hidden, or no active owner. Inspect JSON known/capturedUtc to distinguish unavailable data from a known list without the destination. Saved access may be stale; a shared estate aetheryte ID matches any destination with that ID.");
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
@@ -102,6 +108,8 @@ public partial class MainWindow
         ImGui.TextDisabled("var save = pluginInterface.GetIpcSubscriber<object>(\"XA.Database.Save\");");
         ImGui.TextDisabled("var isReady = pluginInterface.GetIpcSubscriber<bool>(\"XA.Database.IsReady\");");
         ImGui.TextDisabled("var searchCurrent = pluginInterface.GetIpcSubscriber<string, string>(\"XA.Database.SearchCurrentCharacterItemsJson\");");
+        ImGui.TextDisabled("var hasAetheryte = pluginInterface.GetIpcSubscriber<uint, bool>(\"XA.Database.HasAetheryte\");");
+        ImGui.TextDisabled("var characterHasAetheryte = pluginInterface.GetIpcSubscriber<ulong, uint, bool>(\"XA.Database.CharacterHasAetheryte\");");
         ImGui.TextDisabled("if (isReady.InvokeFunc()) save.InvokeAction();");
 
         ImGui.Spacing();

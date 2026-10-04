@@ -2,7 +2,7 @@ namespace XADatabase.Database;
 
 public static class Schema
 {
-    public const int CurrentVersion = 21;
+    public const int CurrentVersion = 22;
     public const int CurrentSnapshotVersion = 3;
 
     public static readonly string[] CreateStatements =
@@ -49,6 +49,7 @@ public static class Schema
             collections_json TEXT NOT NULL DEFAULT '[]',
             active_quests_json TEXT NOT NULL DEFAULT '[]',
             msq_milestones_json TEXT NOT NULL DEFAULT '[]',
+            aetherytes_json TEXT NOT NULL DEFAULT '{}',
             squadron_json TEXT NOT NULL DEFAULT 'null',
             voyages_json TEXT NOT NULL DEFAULT 'null',
             validation_json TEXT NOT NULL DEFAULT '{}',

@@ -52,6 +52,8 @@ public partial class MainWindow : Window, IDisposable
     private List<CollectionSummary> cachedCollections = new();
     private List<ActiveQuestEntry> cachedQuests = new();
     private List<MsqMilestoneEntry> cachedMsqMilestones = new();
+    private AetheryteSnapshot cachedAetherytes = new();
+    private bool hasLiveAetheryteCapture;
     private string cachedPersonalEstate = string.Empty;
     private string cachedSharedEstates = string.Empty;
     private string cachedApartment = string.Empty;
@@ -438,6 +440,9 @@ public partial class MainWindow : Window, IDisposable
                 personalEstate = cachedPersonalEstate,
                 apartment = cachedApartment,
                 trigger = lastSnapshotResult?.Trigger.ToString() ?? string.Empty,
+                aetherytes = InventoryCapturePolicy.IsSameOwner(cacheOwnerContentId, contentId)
+                    ? cachedAetherytes
+                    : new AetheryteSnapshot(),
                 triggerDetail = lastSnapshotResult?.TriggerDetail ?? string.Empty,
                 lastSnapshotAtUtc = lastSnapshotResult?.SavedAtUtc ?? string.Empty,
                 snapshotQuality = lastSnapshotResult?.Quality ?? GetSnapshotQualityLabel(),
@@ -974,7 +979,7 @@ public partial class MainWindow : Window, IDisposable
         lastPersistedSnapshot = persistedSnapshot;
         if (!DataCollected && persistedSnapshot != null)
             ApplySnapshotToCache(persistedSnapshot);
-        JournalCollector.SeedPersistedValue(persistedSnapshot?.Currencies);
+        SeedLiveJournal(playerState.ContentId, persistedSnapshot?.Currencies);
 
         try
         {
@@ -1014,6 +1019,11 @@ public partial class MainWindow : Window, IDisposable
             ApplyCollectedSection("Collections", CollectionCollector.CollectSection(plugin.Services), value => cachedCollections = value);
             ApplyCollectedSection("Active quests", QuestCollector.CollectActiveQuestsSection(plugin.Services), value => cachedQuests = value);
             ApplyCollectedSection("MSQ milestones", QuestCollector.CollectMsqProgressSection(plugin.Services), value => cachedMsqMilestones = value);
+            ApplyCollectedSection("Aetherytes", AetheryteCollector.CollectSection(plugin.Services, playerState.ContentId), value =>
+            {
+                cachedAetherytes = new AetheryteSnapshot { CapturedUtc = SnapshotTime.Format(DateTime.UtcNow), Destinations = value };
+                hasLiveAetheryteCapture = true;
+            });
             ApplyCollectedSection("Housing", HousingCollector.CollectSection(plugin.Services, hasReliableLiveCharacterContext), value =>
             {
                 cachedPersonalEstate = value.PersonalEstate;
@@ -1025,7 +1035,8 @@ public partial class MainWindow : Window, IDisposable
             lastCollectorSectionStates["Journal"] = journalSection.State;
             if (journalSection.RequiresWarning)
                 QueueCollectorWarning($"Journal was {journalSection.State.ToString().ToLowerInvariant()}; the previous value was kept ({journalSection.Detail}).");
-            JournalCollector.ApplyToCurrencies(cachedCurrencies);
+            liveJournalObservation = JournalCollector.CaptureState();
+            JournalCollector.ApplyToCurrencies(playerState.ContentId, cachedCurrencies);
 
             if (persistedSnapshot == null && retainerSection.State == SectionState.AuthoritativeEmpty && freshRetainers.Count == 0)
             {
@@ -1305,6 +1316,8 @@ public partial class MainWindow : Window, IDisposable
     {
         // Capture while the addon/container is still readable, even with autosave disabled.
         CaptureLiveInventory(saddlebagClosing: trigger.Category == "Saddlebag");
+        if (trigger.Category == "Journal" && trigger.AddonName == "Journal")
+            CaptureLiveJournal(trigger.AddonPtr);
         if (!plugin.Services.ClientState.IsLoggedIn || !plugin.Services.PlayerState.IsLoaded)
             return;
 
@@ -1326,11 +1339,6 @@ public partial class MainWindow : Window, IDisposable
         {
             switch (trigger.Category)
             {
-                case "Journal" when trigger.AddonName == "Journal":
-                    plugin.Services.Log.Information("[XA] Journal closing — reading leve allowances via pointer.");
-                    JournalCollector.CollectFromAddon(plugin.Services, trigger.AddonPtr);
-                    break;
-
                 case "FC Members" when trigger.AddonName == "FreeCompany":
                     plugin.Services.Log.Information("[XA] FreeCompany closing — reading FC points via pointer.");
                     FreeCompanyCollector.CollectFromAddon(plugin.Services, trigger.AddonPtr);
@@ -1429,8 +1437,8 @@ public partial class MainWindow : Window, IDisposable
             var persistedSnapshot = lastPersistedSnapshotContentId == contentId
                 ? lastPersistedSnapshot
                 : plugin.Snapshots.Get(contentId);
-            JournalCollector.SeedPersistedValue(persistedSnapshot?.Currencies);
-            JournalCollector.ApplyToCurrencies(cachedCurrencies);
+            SeedLiveJournal(contentId, persistedSnapshot?.Currencies);
+            JournalCollector.ApplyToCurrencies(contentId, cachedCurrencies);
             if (string.IsNullOrEmpty(cachedPersonalEstate) && !hasReliableLiveCharacterContext && persistedSnapshot != null)
                 cachedPersonalEstate = persistedSnapshot.Row.PersonalEstate;
             if (string.IsNullOrEmpty(cachedSharedEstates) && persistedSnapshot != null)
@@ -1501,7 +1509,10 @@ public partial class MainWindow : Window, IDisposable
                 cachedCollections,
                 cachedQuests,
                 cachedMsqMilestones,
-                validationJson);
+                validationJson,
+                cachedAetherytes);
+            XaCharacterSnapshotRepository.PreserveUncollectedAetherytes(
+                sections, persistedSnapshot, contentId, hasLiveAetheryteCapture);
             var normalizedRetainers = XaCharacterSnapshotRepository.NormalizeRetainerPayload(cachedRetainers, cachedListings, cachedRetainerItems, contentId);
 
             var candidateQuality = validation.Warnings.Count > 0 ? SnapshotQuality.Partial : SnapshotQuality.Fresh;
@@ -1761,6 +1772,7 @@ public partial class MainWindow : Window, IDisposable
             CollectionsCollected = SectionWasCollected("Collections", cachedCollections.Count > 0),
             QuestsCollected = SectionWasCollected("Active quests", cachedQuests.Count > 0)
                 && SectionWasCollected("MSQ milestones", cachedMsqMilestones.Count > 0),
+            AetherytesCollected = SectionWasCollected("Aetherytes", false),
         };
     }
 
@@ -1807,6 +1819,7 @@ public partial class MainWindow : Window, IDisposable
             collections = cachedCollections,
             activeQuests = cachedQuests,
             msqMilestones = cachedMsqMilestones,
+            aetherytes = cachedAetherytes,
             validation,
         };
 
@@ -2010,6 +2023,10 @@ public partial class MainWindow : Window, IDisposable
         try
         {
             plugin.DatabaseService.ClearAllCharacterData();
+            BeginCharacterSession();
+            JournalCollector.ClearPersistedValues();
+            cachedAetherytes = new AetheryteSnapshot();
+            hasLiveAetheryteCapture = false;
             knownCharacters.Clear();
             InvalidateDashboardSnapshotCache();
             RefreshItemTooltipCache();
@@ -2491,6 +2508,7 @@ public sealed class CollectorValidationSummary
     public bool VoyagesCollected { get; init; }
     public bool CollectionsCollected { get; init; }
     public bool QuestsCollected { get; init; }
+    public bool AetherytesCollected { get; init; }
     public List<string> Warnings { get; init; } = new();
 }
 

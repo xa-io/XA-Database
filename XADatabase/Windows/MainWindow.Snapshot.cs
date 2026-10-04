@@ -32,7 +32,8 @@ public partial class MainWindow
         cacheOwnerContentId = snapshot.Row.ContentId;
         cacheOwnerCharacterName = snapshot.Row.CharacterName;
         cachedCurrencies = snapshot.Currencies;
-        JournalCollector.SeedPersistedValue(snapshot.Currencies);
+        JournalCollector.RestoreState(JournalLeveObservation.Empty);
+        JournalCollector.SeedPersistedValue(snapshot.Row.ContentId, snapshot.Currencies);
         cachedJobs = ResolveStoredJobs(snapshot);
         cachedInventory = snapshot.InventorySummaries;
         cachedItems = snapshot.AllItems;
@@ -46,6 +47,8 @@ public partial class MainWindow
         cachedCollections = snapshot.Collections;
         cachedQuests = snapshot.ActiveQuests;
         cachedMsqMilestones = snapshot.MsqMilestones;
+        cachedAetherytes = AetheryteSnapshot.Normalize(snapshot.Aetherytes);
+        hasLiveAetheryteCapture = false;
         cachedPersonalEstate = snapshot.Row.PersonalEstate;
         cachedSharedEstates = snapshot.Row.SharedEstates;
         cachedApartment = snapshot.Row.Apartment;
@@ -84,6 +87,8 @@ public partial class MainWindow
         cachedCollections = new List<CollectionSummary>();
         cachedQuests = new List<ActiveQuestEntry>();
         cachedMsqMilestones = new List<MsqMilestoneEntry>();
+        cachedAetherytes = new AetheryteSnapshot();
+        hasLiveAetheryteCapture = false;
         cachedPersonalEstate = string.Empty;
         cachedSharedEstates = string.Empty;
         cachedApartment = string.Empty;
@@ -108,6 +113,9 @@ public partial class MainWindow
         return new CharacterCacheState
         {
             Currencies = cachedCurrencies.ToList(),
+            JournalObservation = JournalCollector.CaptureState(),
+            Aetherytes = cachedAetherytes,
+            HasLiveAetheryteCapture = hasLiveAetheryteCapture,
             Jobs = cachedJobs.ToList(),
             Inventory = cachedInventory.ToList(),
             Items = cachedItems.ToList(),
@@ -140,6 +148,8 @@ public partial class MainWindow
     private void RestoreCharacterCacheState(CharacterCacheState state)
     {
         cachedCurrencies = state.Currencies;
+        cachedAetherytes = state.Aetherytes;
+        hasLiveAetheryteCapture = state.HasLiveAetheryteCapture;
         cachedJobs = state.Jobs;
         cachedInventory = state.Inventory;
         cachedItems = state.Items;
@@ -188,8 +198,7 @@ public partial class MainWindow
                 cachedFc.FcId);
         }
 
-        JournalCollector.ClearPersistedValues();
-        JournalCollector.SeedPersistedValue(cachedCurrencies);
+        JournalCollector.RestoreState(state.JournalObservation);
     }
 
     private void RememberLiveCharacterCache()
@@ -806,6 +815,9 @@ public partial class MainWindow
     private sealed class CharacterCacheState
     {
         public List<CurrencyEntry> Currencies { get; init; } = new();
+        public JournalLeveObservation JournalObservation { get; init; } = JournalLeveObservation.Empty;
+        public AetheryteSnapshot Aetherytes { get; init; } = new();
+        public bool HasLiveAetheryteCapture { get; init; }
         public List<JobEntry> Jobs { get; init; } = new();
         public List<InventorySummary> Inventory { get; init; } = new();
         public List<ContainerItemEntry> Items { get; init; } = new();

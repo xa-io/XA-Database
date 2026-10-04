@@ -293,7 +293,8 @@ public sealed class XaCharacterSnapshotRepository
         List<CollectionSummary> collections,
         List<ActiveQuestEntry> activeQuests,
         List<MsqMilestoneEntry> msqMilestones,
-        string validationJson)
+        string validationJson,
+        AetheryteSnapshot? aetherytes = null)
     {
         var resolvedWorld = world ?? string.Empty;
         var resolvedDatacenter = ResolveDatacenter(resolvedWorld, datacenter);
@@ -335,6 +336,9 @@ public sealed class XaCharacterSnapshotRepository
             CollectionsJson = Serialize(collections, "[]"),
             ActiveQuestsJson = Serialize(activeQuests, "[]"),
             MsqMilestonesJson = Serialize(msqMilestones, "[]"),
+            AetherytesJson = aetherytes?.IsKnown == true
+                ? Serialize(AetheryteSnapshot.Normalize(aetherytes), "{}")
+                : "{}",
             SquadronJson = Serialize(squadron, "null"),
             VoyagesJson = Serialize(voyages, "null"),
             ValidationJson = string.IsNullOrWhiteSpace(validationJson) ? "{}" : validationJson,
@@ -415,6 +419,7 @@ public sealed class XaCharacterSnapshotRepository
                 CollectionsJson = GetRawProperty(root, "collections", "[]"),
                 ActiveQuestsJson = GetRawProperty(root, "activeQuests", "[]"),
                 MsqMilestonesJson = GetRawProperty(root, "msqMilestones", "[]"),
+                AetherytesJson = GetRawProperty(root, "aetherytes", "{}"),
                 SquadronJson = GetRawProperty(root, "squadron", "null"),
                 VoyagesJson = GetRawProperty(root, "voyages", "null"),
                 ValidationJson = string.IsNullOrWhiteSpace(resolvedValidationJson) ? "{}" : resolvedValidationJson,
@@ -551,6 +556,7 @@ public sealed class XaCharacterSnapshotRepository
             Collections = DeserializeListTracked<CollectionSummary>(row.CollectionsJson, "collections_json", parseErrors),
             ActiveQuests = DeserializeListTracked<ActiveQuestEntry>(row.ActiveQuestsJson, "active_quests_json", parseErrors),
             MsqMilestones = DeserializeListTracked<MsqMilestoneEntry>(row.MsqMilestonesJson, "msq_milestones_json", parseErrors),
+            Aetherytes = DeserializeAetherytesTracked(row.AetherytesJson, parseErrors),
             ParseErrors = parseErrors,
         };
 
@@ -628,6 +634,7 @@ public sealed class XaCharacterSnapshotRepository
             CollectionsJson = reader["collections_json"].ToString() ?? "[]",
             ActiveQuestsJson = reader["active_quests_json"].ToString() ?? "[]",
             MsqMilestonesJson = reader["msq_milestones_json"].ToString() ?? "[]",
+            AetherytesJson = reader["aetherytes_json"].ToString() ?? "{}",
             SquadronJson = reader["squadron_json"].ToString() ?? "null",
             VoyagesJson = reader["voyages_json"].ToString() ?? "null",
             ValidationJson = reader["validation_json"].ToString() ?? "{}",
@@ -883,6 +890,47 @@ public sealed class XaCharacterSnapshotRepository
     private static T? DeserializeObject<T>(string? json) where T : class
         => DeserializeObjectTracked<T>(json, typeof(T).Name, new Dictionary<string, string>(StringComparer.Ordinal));
 
+    private static AetheryteSnapshot DeserializeAetherytesTracked(
+        string? json,
+        IDictionary<string, string> parseErrors)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return new AetheryteSnapshot();
+
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            if (root.ValueKind == JsonValueKind.Null)
+                return new AetheryteSnapshot();
+            if (root.ValueKind != JsonValueKind.Object)
+                throw new JsonException("Teleport destinations must be a capture envelope.");
+
+            var observation = JsonSerializer.Deserialize<AetheryteSnapshot>(json, JsonOptions)
+                ?? new AetheryteSnapshot();
+            if (!string.IsNullOrWhiteSpace(observation.CapturedUtc))
+            {
+                if (!observation.IsKnown)
+                    throw new JsonException("Teleport capture time is invalid.");
+                if (!TryGetPropertyIgnoreCase(root, "Destinations", out var destinations)
+                    || destinations.ValueKind != JsonValueKind.Array)
+                    throw new JsonException("A known teleport capture must contain a destination array.");
+                if (destinations.GetArrayLength() > AetheryteData.MaximumDestinations
+                    || observation.Destinations.Any(entry => entry == null
+                        || entry.AetheryteId == 0 || entry.TerritoryId == 0))
+                    throw new JsonException("Teleport capture contains invalid destinations.");
+            }
+
+            return AetheryteSnapshot.Normalize(observation);
+        }
+        catch (Exception ex)
+        {
+            parseErrors["aetherytes_json"] = ex.Message;
+            Plugin.Log.Error($"[XA] Snapshot section 'aetherytes_json' is unreadable: {ex.Message}");
+            return new AetheryteSnapshot();
+        }
+    }
+
     private static T? DeserializeObjectTracked<T>(
         string? json,
         string sectionName,
@@ -932,10 +980,26 @@ public sealed class XaCharacterSnapshotRepository
                 case "collections_json": candidate.CollectionsJson = row.CollectionsJson; break;
                 case "active_quests_json": candidate.ActiveQuestsJson = row.ActiveQuestsJson; break;
                 case "msq_milestones_json": candidate.MsqMilestonesJson = row.MsqMilestonesJson; break;
+                case "aetherytes_json": candidate.AetherytesJson = row.AetherytesJson; break;
                 case "squadron_json": candidate.SquadronJson = row.SquadronJson; break;
                 case "voyages_json": candidate.VoyagesJson = row.VoyagesJson; break;
             }
         }
+    }
+
+    /// <summary>Retains raw teleport bytes, including unreadable evidence, when no fresh capture can replace them.</summary>
+    public static bool PreserveUncollectedAetherytes(
+        XaCharacterSnapshotSections candidate,
+        XaCharacterSnapshotData? persistedSnapshot,
+        ulong ownerContentId,
+        bool hasAuthoritativeCapture)
+    {
+        if (hasAuthoritativeCapture || persistedSnapshot == null || ownerContentId == 0
+            || persistedSnapshot.Row.ContentId != ownerContentId)
+            return false;
+
+        candidate.AetherytesJson = persistedSnapshot.Row.AetherytesJson;
+        return true;
     }
 
     private static string GetRawProperty(JsonElement root, string propertyName, string fallback)
@@ -1241,6 +1305,7 @@ public sealed class XaCharacterSnapshotSections
     public string CollectionsJson { get; set; } = "[]";
     public string ActiveQuestsJson { get; set; } = "[]";
     public string MsqMilestonesJson { get; set; } = "[]";
+    public string AetherytesJson { get; set; } = "{}";
     public string SquadronJson { get; set; } = "null";
     public string VoyagesJson { get; set; } = "null";
     public string ValidationJson { get; set; } = "{}";
@@ -1285,6 +1350,7 @@ public sealed class XaCharacterSnapshotRow
     public string CollectionsJson { get; init; } = "[]";
     public string ActiveQuestsJson { get; init; } = "[]";
     public string MsqMilestonesJson { get; init; } = "[]";
+    public string AetherytesJson { get; init; } = "{}";
     public string SquadronJson { get; init; } = "null";
     public string VoyagesJson { get; init; } = "null";
     public string ValidationJson { get; init; } = "{}";
@@ -1319,6 +1385,7 @@ public sealed class XaCharacterSnapshotData
     public List<CollectionSummary> Collections { get; set; } = new();
     public List<ActiveQuestEntry> ActiveQuests { get; set; } = new();
     public List<MsqMilestoneEntry> MsqMilestones { get; set; } = new();
+    public AetheryteSnapshot Aetherytes { get; set; } = new();
 }
 
 public sealed class XaCharacterRosterData

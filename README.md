@@ -28,7 +28,7 @@ A Dalamud plugin for FINAL FANTASY XIV that collects character data — inventor
 - **Auto-Save** — Save on login, logout, manual refresh, and IPC requests. Optional timer and addon-close settings control additional disk saves; inventory-change capture does not force a save. Queued work stays with its originating character, and active Search results refresh after saving.
 - **Database Health Checks** — Run built-in health, read/write, and integrity checks from Settings.
 - **Migration Safety** — Back up existing data before schema or legacy-table migrations, apply upgrades transactionally, recover preserved high-bit FC identities during corrective migrations, and retain legacy tables unless the migrated character set passes completeness checks.
-- **Plugin Integration** — Share character data through 21 IPC channels, with safe responses when data is unavailable, separate save and refresh times in UTC and local time, and reliable IPC cleanup on reload or unload.
+- **Plugin Integration** — Share character data through IPC channels, with safe responses when data is unavailable, separate save and refresh times in UTC and local time, and reliable IPC cleanup on reload or unload.
 - **Export** — Export current or saved character data to CSV or JSON, and open the actual `xa.db` folder directly from Settings.
 
 ## Commands

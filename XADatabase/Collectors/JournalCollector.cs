@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Text.RegularExpressions;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using XADatabase.Core.Collection;
 using XADatabase.Core.Localization;
@@ -14,21 +13,26 @@ public static class JournalCollector
     private const string JournalAddonName = "Journal";
     private const string LeveAllowanceCategory = "Common";
     private const string LeveAllowanceName = "Leve Allowances";
-    private const int LeveAllowanceCap = 100;
-    private static readonly Regex FirstNumberRegex = new(@"\d+", RegexOptions.Compiled);
+    private const int LeveAllowanceCap = JournalLeveObservation.AllowanceCap;
+    private static JournalLeveObservation observation = JournalLeveObservation.Empty;
 
-    public static int? LastLeveAllowances { get; private set; }
+    public static int? LastLeveAllowances => observation.Allowances;
+
+    public static JournalLeveObservation CaptureState() => observation;
+
+    public static void RestoreState(JournalLeveObservation state)
+    {
+        observation = state;
+    }
 
     public static void ClearPersistedValues()
     {
-        LastLeveAllowances = null;
+        observation = JournalLeveObservation.Empty;
     }
 
-    public static void SeedPersistedValue(IEnumerable<CurrencyEntry>? currencies)
+    public static void SeedPersistedValue(ulong ownerContentId, IEnumerable<CurrencyEntry>? currencies)
     {
-        var persistedValue = GetLeveAllowances(currencies);
-        if (persistedValue.HasValue)
-            LastLeveAllowances = persistedValue.Value;
+        observation = observation.SeedPersistedFallback(ownerContentId, GetLeveAllowances(currencies));
     }
 
     public static int? GetLeveAllowances(IEnumerable<CurrencyEntry>? currencies)
@@ -47,9 +51,10 @@ public static class JournalCollector
         return null;
     }
 
-    public static void ApplyToCurrencies(List<CurrencyEntry> currencies)
+    public static void ApplyToCurrencies(ulong ownerContentId, List<CurrencyEntry> currencies)
     {
-        if (currencies == null || !LastLeveAllowances.HasValue)
+        var allowances = observation.GetAllowances(ownerContentId);
+        if (currencies == null || !allowances.HasValue)
             return;
 
         currencies.RemoveAll(IsLeveAllowanceEntry);
@@ -59,7 +64,7 @@ public static class JournalCollector
             Key = CurrencyIdentity.LeveAllowances,
             Category = LeveAllowanceCategory,
             Name = LeveAllowanceName,
-            Amount = Math.Clamp(LastLeveAllowances.Value, 0, LeveAllowanceCap),
+            Amount = allowances.Value,
             Cap = LeveAllowanceCap,
         };
 
@@ -81,6 +86,10 @@ public static class JournalCollector
     {
         try
         {
+            if (!TryGetLiveOwner(services, out var ownerContentId))
+                return SectionResult<int?>.Unavailable(null, "journal owner is not loaded");
+
+            observation = observation.BindOwner(ownerContentId);
             var stage = AtkStage.Instance();
             if (stage == null || stage->RaptureAtkUnitManager == null)
                 return SectionResult<int?>.Unavailable(LastLeveAllowances, "journal addon manager is not ready");
@@ -90,10 +99,13 @@ public static class JournalCollector
                 return SectionResult<int?>.Unavailable(LastLeveAllowances, "journal addon is not loaded");
 
             var allText = AddonTextReader.ReadAllText(addon);
-            if (!TryResolveLeveAllowances(allText, out var value))
+            if (!JournalLeveParser.TryResolveLeveAllowances(allText, out var value))
                 return SectionResult<int?>.Failed(LastLeveAllowances, "leve allowances could not be parsed from the loaded journal");
 
-            LastLeveAllowances = value;
+            if (!TryGetLiveOwner(services, out var currentOwnerContentId) || currentOwnerContentId != ownerContentId)
+                return SectionResult<int?>.Unavailable(null, "journal owner changed during collection");
+
+            observation = observation.Observe(ownerContentId, value, DateTimeOffset.UtcNow);
             return SectionResult<int?>.Available(value);
         }
         catch (Exception ex)
@@ -103,45 +115,43 @@ public static class JournalCollector
         }
     }
 
-    public static unsafe void TryCollectFromOpenAddon(XaServices services)
+    public static bool TryCollectFromOpenAddon(XaServices services)
     {
-        var stage = AtkStage.Instance();
-        if (stage == null)
-            return;
-
-        var unitManager = stage->RaptureAtkUnitManager;
-        if (unitManager == null)
-            return;
-
-        var addon = unitManager->GetAddonByName(JournalAddonName);
-        if (addon == null || !addon->IsVisible || !addon->IsReady)
-            return;
-
-        CollectFromAddon(addon, services);
+        return CollectSection(services).CanReplacePersisted;
     }
 
-    public static unsafe void CollectFromAddon(XaServices services, nint addonPtr)
+    public static unsafe bool CollectFromAddon(XaServices services, nint addonPtr)
     {
-        if (addonPtr == nint.Zero)
-            return;
+        if (addonPtr == nint.Zero || !TryGetLiveOwner(services, out var ownerContentId))
+            return false;
 
-        CollectFromAddon((AtkUnitBase*)addonPtr, services);
-    }
-
-    private static unsafe void CollectFromAddon(AtkUnitBase* addon, XaServices services)
-    {
-        if (addon == null)
-            return;
-
-        var allText = AddonTextReader.ReadAllText(addon);
-        if (!TryResolveLeveAllowances(allText, out var leveAllowances))
-            return;
-
-        if (LastLeveAllowances != leveAllowances)
+        try
         {
-            LastLeveAllowances = leveAllowances;
-            services.Log.Information($"[XA] Journal leve allowances from addon: {leveAllowances}");
+            // A PreClose/PreFinalize pointer can remain readable after visibility clears.
+            // Keep this separate from the visible, ready open-window path above.
+            var allText = AddonTextReader.ReadAllText((AtkUnitBase*)addonPtr);
+            if (!JournalLeveParser.TryResolveLeveAllowances(allText, out var leveAllowances)
+                || !TryGetLiveOwner(services, out var currentOwnerContentId)
+                || currentOwnerContentId != ownerContentId)
+                return false;
+
+            var previous = observation.GetAllowances(ownerContentId);
+            observation = observation.Observe(ownerContentId, leveAllowances, DateTimeOffset.UtcNow);
+            if (previous != leveAllowances)
+                services.Log.Information($"[XA] Journal leve allowances from addon: {leveAllowances}");
+            return true;
         }
+        catch (Exception ex)
+        {
+            services.Log.Error(ex, "[XA] Journal close collection failed.");
+            return false;
+        }
+    }
+
+    private static bool TryGetLiveOwner(XaServices services, out ulong ownerContentId)
+    {
+        ownerContentId = services.PlayerState.ContentId;
+        return services.ClientState.IsLoggedIn && services.PlayerState.IsLoaded && ownerContentId != 0;
     }
 
     private static bool IsLeveAllowanceEntry(CurrencyEntry? entry)
@@ -155,49 +165,5 @@ public static class JournalCollector
         return string.IsNullOrWhiteSpace(entry.Key)
             && (entry.Name.Equals(LeveAllowanceName, StringComparison.OrdinalIgnoreCase)
                 || entry.Name.Equals("Leve Allowance", StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static bool TryResolveLeveAllowances(List<(string Path, uint NodeId, string Text)> allText, out int leveAllowances)
-    {
-        foreach (var entry in allText)
-        {
-            if (!entry.Path.Equals("[6]→[2]", StringComparison.Ordinal))
-                continue;
-
-            if (entry.NodeId != 2)
-                continue;
-
-            if (TryParseAllowance(entry.Text, out leveAllowances))
-                return true;
-        }
-
-        foreach (var entry in allText)
-        {
-            if (!entry.Path.StartsWith("[6]", StringComparison.Ordinal))
-                continue;
-
-            if (entry.NodeId != 2)
-                continue;
-
-            if (TryParseAllowance(entry.Text, out leveAllowances))
-                return true;
-        }
-
-        leveAllowances = 0;
-        return false;
-    }
-
-    private static bool TryParseAllowance(string text, out int leveAllowances)
-    {
-        leveAllowances = 0;
-        if (string.IsNullOrWhiteSpace(text))
-            return false;
-
-        var match = FirstNumberRegex.Match(text);
-        if (!match.Success || !int.TryParse(match.Value, out var parsedValue))
-            return false;
-
-        leveAllowances = Math.Clamp(parsedValue, 0, LeveAllowanceCap);
-        return true;
     }
 }

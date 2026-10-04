@@ -33,6 +33,8 @@ public partial class MainWindow
 
         ImGui.Spacing();
 
+        DrawAetheryteProgress();
+
         // ── Collections ──
         ImGui.TextColored(new Vector4(0.4f, 0.8f, 1.0f, 1.0f), "Collections");
         ImGui.Spacing();

@@ -188,10 +188,11 @@ public sealed class DatabaseService : IDisposable
         var needsXaUpgrade = NeedsXaCharactersUpgrade();
         var needsRegionUpgrade = TableExists("xa_characters") && !ColumnExists("xa_characters", "region");
         var needsSharedEstatesUpgrade = TableExists("xa_characters") && !ColumnExists("xa_characters", "shared_estates");
+        var needsAetherytesUpgrade = TableExists("xa_characters") && !ColumnExists("xa_characters", "aetherytes_json");
         var needsRetainerGilRepair = TableExists("xa_characters") && HasNegativeRetainerGilRows();
         var needsFreeCompanyIdRecovery = currentVersion < 21 && TableExists("xa_characters");
 
-        if (currentVersion >= Schema.CurrentVersion && !needsXaUpgrade && !needsRegionUpgrade && !needsSharedEstatesUpgrade && !needsRetainerGilRepair)
+        if (currentVersion >= Schema.CurrentVersion && !needsXaUpgrade && !needsRegionUpgrade && !needsSharedEstatesUpgrade && !needsAetherytesUpgrade && !needsRetainerGilRepair)
         {
             Plugin.Log.Information($"[XA] Database schema is up to date (v{currentVersion}).");
             return;
@@ -270,6 +271,12 @@ public sealed class DatabaseService : IDisposable
                     Plugin.Log.Warning($"[XA] Cleared {clearedRows} unrecoverable clamped fc_id sentinel value(s); the correct FC identity requires a future authoritative live snapshot.");
                 Plugin.Log.Information($"[XA] Applied schema migration v{currentVersion} → v21 (recover preserved FC identity values)");
             }
+
+            if (needsAetherytesUpgrade)
+                AddColumnIfMissing(conn, transaction, "xa_characters", "aetherytes_json", "TEXT NOT NULL DEFAULT '{}'");
+
+            if (currentVersion < 22 || needsAetherytesUpgrade)
+                Plugin.Log.Information("[XA] Applied schema migration to v22 (per-character teleport destinations)");
 
             EnsureIndexes(conn, transaction);
             UpsertSchemaVersion(conn, transaction);
@@ -468,6 +475,7 @@ public sealed class DatabaseService : IDisposable
                 collections_json,
                 active_quests_json,
                 msq_milestones_json,
+                aetherytes_json,
                 squadron_json,
                 voyages_json,
                 validation_json,
@@ -516,6 +524,7 @@ public sealed class DatabaseService : IDisposable
                 @collections_json,
                 @active_quests_json,
                 @msq_milestones_json,
+                @aetherytes_json,
                 @squadron_json,
                 @voyages_json,
                 @validation_json,
@@ -563,6 +572,7 @@ public sealed class DatabaseService : IDisposable
                 collections_json = excluded.collections_json,
                 active_quests_json = excluded.active_quests_json,
                 msq_milestones_json = excluded.msq_milestones_json,
+                aetherytes_json = excluded.aetherytes_json,
                 squadron_json = excluded.squadron_json,
                 voyages_json = excluded.voyages_json,
                 validation_json = excluded.validation_json,
@@ -609,6 +619,7 @@ public sealed class DatabaseService : IDisposable
         AddText(cmd, "@collections_json", sections.CollectionsJson);
         AddText(cmd, "@active_quests_json", sections.ActiveQuestsJson);
         AddText(cmd, "@msq_milestones_json", sections.MsqMilestonesJson);
+        AddText(cmd, "@aetherytes_json", sections.AetherytesJson);
         AddText(cmd, "@squadron_json", sections.SquadronJson);
         AddText(cmd, "@voyages_json", sections.VoyagesJson);
         AddText(cmd, "@validation_json", sections.ValidationJson);

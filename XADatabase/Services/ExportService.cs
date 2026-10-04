@@ -146,7 +146,8 @@ public static class ExportService
         List<RetainerInventoryItem> retainerItems,
         FreeCompanyEntry? fc,
         List<CollectionSummary> collections,
-        List<ActiveQuestEntry> quests)
+        List<ActiveQuestEntry> quests,
+        AetheryteSnapshot? aetherytes = null)
     {
         var snapshot = new Dictionary<string, object?>
         {
@@ -180,9 +181,25 @@ public static class ExportService
             ["free_company"] = fc,
             ["collections"] = collections,
             ["active_quests"] = quests,
+            ["aetherytes"] = AetheryteSnapshot.Normalize(aetherytes),
         };
 
         return JsonSerializer.Serialize(snapshot, JsonOpts);
+    }
+
+    public static string ExportAetherytesCsv(IEnumerable<(string Name, string World, AetheryteSnapshot Snapshot)> characters)
+    {
+        var csv = new StringBuilder("Character,World,CapturedUtc,Known,AetheryteId,Destination,TerritoryId,Zone,SubIndex,Ward,Plot,EstateType,HouseId\n");
+        foreach (var (name, world, value) in characters)
+        {
+            var snapshot = AetheryteSnapshot.Normalize(value);
+            var prefix = $"{CsvEscape(name)},{CsvEscape(world)},{CsvEscape(snapshot.CapturedUtc)},{snapshot.IsKnown}";
+            if (snapshot.Destinations.Count == 0)
+                csv.AppendLine(prefix + ",,,,,,,,,");
+            foreach (var entry in snapshot.Destinations)
+                csv.AppendLine($"{prefix},{entry.AetheryteId},{CsvEscape(entry.Name)},{entry.TerritoryId},{CsvEscape(entry.TerritoryName)},{entry.SubIndex},{entry.Ward},{entry.Plot},{entry.EstateType},{entry.HouseId}");
+        }
+        return csv.ToString();
     }
 
     // ── File Write Helper ──
