@@ -7,6 +7,7 @@ using Dalamud.Game.Text.SeStringHandling.Payloads;
 using Dalamud.Hooking;
 using Dalamud.Memory;
 using Dalamud.Plugin.Services;
+using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using XADatabase.Database;
 using XADatabase.Models;
@@ -18,15 +19,17 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
     private const string GenerateItemTooltipSignature = "48 89 5C 24 ?? 55 56 57 41 54 41 55 41 56 41 57 48 83 EC ?? 48 8B 42 ?? 4C 8B EA";
     private const int ItemDescriptionFieldIndex = 13;
     private const int EffectsFieldIndex = 16;
+    private const int TooltipVisibilityFlagsIndex = 5;
+    private const int DescriptionVisibilityFlag = 2;
+    private const int EffectsVisibilityFlag = 256;
 
     private readonly Plugin plugin;
-    private readonly IGameGui gameGui;
     private readonly IPluginLog log;
     private readonly object syncRoot = new();
     private Hook<GenerateItemTooltipDelegate>? generateItemTooltipHook;
 
     private readonly Dictionary<ulong, CachedCharacterTooltipSnapshot> cachedSnapshotItems = new();
-    private Dictionary<ItemTooltipKey, OwnedItemTooltipSummary> cachedSummaries = new();
+    private Dictionary<uint, OwnedItemTooltipSummary> cachedSummaries = new();
     private int cacheGeneration;
     private bool disposed;
 
@@ -41,11 +44,9 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
     public ItemLocationTooltipService(
         Plugin plugin,
         IGameInteropProvider gameInterop,
-        IGameGui gameGui,
         IPluginLog log)
     {
         this.plugin = plugin;
-        this.gameGui = gameGui;
         this.log = log;
 
         RefreshCache();
@@ -178,13 +179,11 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
             updatedUtc,
             allItems.Select(item => new CachedTooltipItem(
                 item.ItemId,
-                item.IsHq,
                 item.ItemName,
                 item.Quantity,
                 SimplifyTooltipLocation(item.ContainerName))).ToList(),
             retainerItems.Select(item => new CachedTooltipItem(
                 item.ItemId,
-                item.IsHq,
                 item.ItemName,
                 item.Quantity,
                 "Retainers")).ToList());
@@ -217,11 +216,11 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
         }, TaskScheduler.Default);
     }
 
-    public bool TryGetSummary(uint itemId, bool isHq, out OwnedItemTooltipSummary summary)
+    public bool TryGetSummary(uint itemId, out OwnedItemTooltipSummary summary)
     {
         lock (syncRoot)
         {
-            return cachedSummaries.TryGetValue(new ItemTooltipKey(itemId, isHq), out summary!);
+            return cachedSummaries.TryGetValue(NormalizeItemId(itemId), out summary!);
         }
     }
 
@@ -252,8 +251,8 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
     {
         try
         {
-            if (stringArrayData != null)
-                AppendOwnershipSummary(stringArrayData);
+            if (numberArrayData != null && stringArrayData != null)
+                AppendOwnershipSummary(numberArrayData, stringArrayData);
         }
         catch (Exception ex)
         {
@@ -263,22 +262,24 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
         return generateItemTooltipHook!.Original(addon, numberArrayData, stringArrayData);
     }
 
-    private void AppendOwnershipSummary(StringArrayData* stringArrayData)
+    private void AppendOwnershipSummary(NumberArrayData* numberArrayData, StringArrayData* stringArrayData)
     {
+        if (numberArrayData == null || numberArrayData->Size <= TooltipVisibilityFlagsIndex || numberArrayData->IntArray == null)
+            return;
+
+        RemoveOwnershipSummary(numberArrayData, stringArrayData, ItemDescriptionFieldIndex, DescriptionVisibilityFlag);
+        RemoveOwnershipSummary(numberArrayData, stringArrayData, EffectsFieldIndex, EffectsVisibilityFlag);
+
         if (!plugin.Configuration.SearchHoverTooltipEnabled)
             return;
 
-        if (!TryResolveHoveredItem(out var itemId, out var isHq))
+        if (!TryResolveTooltipItem(out var itemId))
             return;
 
-        if (!TryGetSummary(itemId, isHq, out var summary) || summary.TotalQuantity <= 0)
+        if (!TryGetSummary(itemId, out var summary) || summary.TotalQuantity <= 0)
             return;
 
         if (!TrySelectTooltipField(stringArrayData, out var fieldIndex, out var tooltipText))
-            return;
-
-        if (tooltipText.TextValue.Contains("\nOwned: ", StringComparison.Ordinal)
-            && tooltipText.TextValue.Contains("\nLocations:", StringComparison.Ordinal))
             return;
 
         var newText = "\n" + string.Join("\n", BuildTooltipLines(summary, plugin.Configuration.SearchHoverTooltipCharacterLimit));
@@ -289,6 +290,46 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
         tooltipText.Payloads.Add(new UIForegroundPayload(0));
 
         SetTooltipString(stringArrayData, fieldIndex, tooltipText);
+        var visibilityFlag = fieldIndex == ItemDescriptionFieldIndex ? DescriptionVisibilityFlag : EffectsVisibilityFlag;
+        numberArrayData->SetValue(TooltipVisibilityFlagsIndex, numberArrayData->IntArray[TooltipVisibilityFlagsIndex] | visibilityFlag);
+    }
+
+    private static void RemoveOwnershipSummary(NumberArrayData* numberArrayData, StringArrayData* stringArrayData, int fieldIndex, int visibilityFlag)
+    {
+        if (!TryReadTooltipField(stringArrayData, fieldIndex, out var tooltipText, out _))
+            return;
+
+        if (!RemoveOwnershipPayloads(tooltipText))
+            return;
+
+        SetTooltipString(stringArrayData, fieldIndex, tooltipText);
+        if (tooltipText.Payloads.Count == 0)
+            numberArrayData->SetValue(TooltipVisibilityFlagsIndex, numberArrayData->IntArray[TooltipVisibilityFlagsIndex] & ~visibilityFlag);
+    }
+
+    private static bool RemoveOwnershipPayloads(SeString tooltipText)
+    {
+        var removed = false;
+        for (var index = 0; index <= tooltipText.Payloads.Count - 5;)
+        {
+            if (tooltipText.Payloads[index] is UIGlowPayload { ColorKey: 0 }
+                && tooltipText.Payloads[index + 1] is UIForegroundPayload { ColorKey: 0 }
+                && tooltipText.Payloads[index + 2] is TextPayload { Text: string text }
+                && text.StartsWith("\nOwned: ", StringComparison.Ordinal)
+                && text.Contains("\nLocations:", StringComparison.Ordinal)
+                && tooltipText.Payloads[index + 3] is UIGlowPayload { ColorKey: 0 }
+                && tooltipText.Payloads[index + 4] is UIForegroundPayload { ColorKey: 0 })
+            {
+                tooltipText.Payloads.RemoveRange(index, 5);
+                removed = true;
+            }
+            else
+            {
+                index++;
+            }
+        }
+
+        return removed;
     }
 
     private bool TrySelectTooltipField(StringArrayData* stringArrayData, out int fieldIndex, out SeString tooltipText)
@@ -334,7 +375,7 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
         tooltipText = new SeString();
         hasVisibleText = false;
 
-        if (stringArrayData == null || fieldIndex < 0 || fieldIndex >= stringArrayData->Size)
+        if (stringArrayData == null || stringArrayData->StringArray == null || fieldIndex < 0 || fieldIndex >= stringArrayData->Size)
             return false;
 
         var pointer = stringArrayData->StringArray[fieldIndex];
@@ -355,29 +396,23 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
         }
     }
 
-    private bool TryResolveHoveredItem(out uint itemId, out bool isHq)
+    private static bool TryResolveTooltipItem(out uint itemId)
     {
         itemId = 0;
-        isHq = false;
-
-        var hoveredItem = (uint)gameGui.HoveredItem;
-        if (hoveredItem == 0)
+        var agent = AgentItemDetail.Instance();
+        if (agent == null)
             return false;
 
-        if (hoveredItem >= 2_000_000)
-        {
-            itemId = hoveredItem;
-            return true;
-        }
-
-        isHq = hoveredItem >= 1_000_000;
-        itemId = hoveredItem % 500_000;
+        itemId = NormalizeItemId(agent->ItemId);
         return itemId != 0;
     }
 
-    private static Dictionary<ItemTooltipKey, OwnedItemTooltipSummary> BuildSummaries(IEnumerable<CachedCharacterTooltipSnapshot> snapshots)
+    private static uint NormalizeItemId(uint rawItemId)
+        => rawItemId >= 2_000_000 ? rawItemId : rawItemId % 500_000;
+
+    private static Dictionary<uint, OwnedItemTooltipSummary> BuildSummaries(IEnumerable<CachedCharacterTooltipSnapshot> snapshots)
     {
-        var items = new Dictionary<ItemTooltipKey, ItemTooltipAccumulator>();
+        var items = new Dictionary<uint, ItemTooltipAccumulator>();
 
         foreach (var snapshot in snapshots)
         {
@@ -402,31 +437,29 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
             snapshot.UpdatedUtc,
             snapshot.AllItems.Select(item => new CachedTooltipItem(
                 item.ItemId,
-                item.IsHq,
                 item.ItemName,
                 item.Quantity,
                 SimplifyTooltipLocation(item.ContainerName))).ToList(),
             snapshot.RetainerItems.Select(item => new CachedTooltipItem(
                 item.ItemId,
-                item.IsHq,
                 item.ItemName,
                 item.Quantity,
                 "Retainers")).ToList());
     }
 
     private static void AccumulateItem(
-        Dictionary<ItemTooltipKey, ItemTooltipAccumulator> items,
+        Dictionary<uint, ItemTooltipAccumulator> items,
         CachedCharacterTooltipSnapshot snapshot,
         CachedTooltipItem item)
     {
-        if (item.ItemId == 0 || item.Quantity <= 0)
+        var itemId = NormalizeItemId(item.ItemId);
+        if (itemId == 0 || item.Quantity <= 0)
             return;
 
-        var key = new ItemTooltipKey(item.ItemId, item.IsHq);
-        if (!items.TryGetValue(key, out var itemAccumulator))
+        if (!items.TryGetValue(itemId, out var itemAccumulator))
         {
-            itemAccumulator = new ItemTooltipAccumulator(item.ItemId, item.IsHq, item.ItemName);
-            items[key] = itemAccumulator;
+            itemAccumulator = new ItemTooltipAccumulator(itemId, item.ItemName);
+            items[itemId] = itemAccumulator;
         }
         else if (string.IsNullOrWhiteSpace(itemAccumulator.ItemName) && !string.IsNullOrWhiteSpace(item.ItemName))
         {
@@ -471,13 +504,8 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
         var ordered = locations
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
             .ToList();
-        if (ordered.Count <= 2)
-            return string.Join(", ", ordered);
-
-        return $"{ordered[0]}, {ordered[1]}, +{ordered.Count - 2} more";
+        return string.Join(", ", ordered);
     }
-
-    private readonly record struct ItemTooltipKey(uint ItemId, bool IsHq);
 
     private sealed record CachedCharacterTooltipSnapshot(
         ulong ContentId,
@@ -489,7 +517,6 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
 
     private readonly record struct CachedTooltipItem(
         uint ItemId,
-        bool IsHq,
         string ItemName,
         int Quantity,
         string LocationName);
@@ -498,15 +525,13 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
     {
         private readonly Dictionary<ulong, CharacterTooltipAccumulator> characters = new();
 
-        public ItemTooltipAccumulator(uint itemId, bool isHq, string itemName)
+        public ItemTooltipAccumulator(uint itemId, string itemName)
         {
             ItemId = itemId;
-            IsHq = isHq;
             ItemName = itemName;
         }
 
         public uint ItemId { get; }
-        public bool IsHq { get; }
         public string ItemName { get; set; }
 
         public void Add(ulong contentId, string characterName, string world, string updatedUtc, int quantity, string locationName)
@@ -542,7 +567,6 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
 
             return new OwnedItemTooltipSummary(
                 ItemId,
-                IsHq,
                 ItemName,
                 orderedCharacters.Sum(character => character.TotalQuantity),
                 orderedCharacters);
@@ -572,7 +596,6 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
 
 public sealed record OwnedItemTooltipSummary(
     uint ItemId,
-    bool IsHq,
     string ItemName,
     int TotalQuantity,
     IReadOnlyList<OwnedItemTooltipCharacterSummary> Characters);

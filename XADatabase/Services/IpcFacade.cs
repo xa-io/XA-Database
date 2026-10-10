@@ -45,4 +45,5 @@ public sealed class IpcFacade
     public string GetAllCharacterAetherytesJson() => mainWindow.GetAllCharacterAetherytesJson();
     public bool HasAetheryte(uint aetheryteId) => mainWindow.HasAetheryte(aetheryteId);
     public bool CharacterHasAetheryte(ulong contentId, uint aetheryteId) => mainWindow.CharacterHasAetheryte(contentId, aetheryteId);
+    public string SearchCharacterStorageItemsJson(string requestJson) => mainWindow.SearchCharacterStorageItemsJson(requestJson);
 }

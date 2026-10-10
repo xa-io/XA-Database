@@ -11,6 +11,7 @@ using XADatabase.Collectors;
 using XADatabase.Database;
 using XADatabase.Models;
 using Dalamud.Game.Text;
+using Dalamud.Interface.Textures;
 using Dalamud.Game.Text.SeStringHandling;
 using Dalamud.Game.Text.SeStringHandling.Payloads;
 using XADatabase.Services;
@@ -43,6 +44,8 @@ public partial class MainWindow
         ("Crystals", new[] { "Crystals" }),
         ("Saddlebag", new[] { "Saddlebag 1", "Saddlebag 2" }),
         ("Premium Saddlebag", new[] { "Premium Saddlebag 1", "Premium Saddlebag 2" }),
+        (StorageItemCollector.ArmoireName, new[] { StorageItemCollector.ArmoireName }),
+        (StorageItemCollector.DresserName, new[] { StorageItemCollector.DresserName }),
     };
 
     private void DrawInventoryTab()
@@ -54,7 +57,7 @@ public partial class MainWindow
         ImGui.Spacing();
 
         var playerState = plugin.Services.PlayerState;
-        if (!playerState.IsLoaded && cachedInventory.Count == 0)
+        if (!playerState.IsLoaded && !viewingContentId.HasValue && cachedInventory.Count == 0)
         {
             ImGui.TextColored(new Vector4(1.0f, 0.6f, 0.0f, 1.0f), "Not logged in \u2014 select a character above to view data.");
             return;
@@ -150,23 +153,32 @@ public partial class MainWindow
             var pct = slotTotal > 0 ? (float)usedTotal / slotTotal * 100f : 0f;
 
             // Section header with slot usage
-            var headerLabel = sectionItems.Count > 0
-                ? $"{sectionName}  ({usedTotal}/{slotTotal} — {pct:F0}%%)"
+            var isStorage = sectionName is StorageItemCollector.ArmoireName or StorageItemCollector.DresserName;
+            var recorded = sectionSlots.Count > 0;
+            var headerLabel = isStorage && !recorded
+                ? $"{sectionName}  (Not recorded)"
+                : sectionItems.Count > 0
+                ? $"{sectionName}  ({usedTotal}/{slotTotal} — {pct:F0}%)"
                 : $"{sectionName}  ({usedTotal}/{slotTotal})";
 
-            if (!ImGui.CollapsingHeader(headerLabel))
+            if (!ImGui.CollapsingHeader($"{headerLabel}###InventorySection_{sectionName}"))
                 continue;
+
+            if (sectionName == StorageItemCollector.DresserName && recorded)
+                ImGui.TextDisabled("  Usage counts physical slots; stored outfit pieces appear as individual items.");
 
             if (sectionItems.Count == 0)
             {
-                ImGui.TextDisabled("  No items.");
+                ImGui.TextDisabled(isStorage
+                    ? recorded ? "  Recorded empty." : "  Not recorded. Open this storage in game, then save."
+                    : "  No items.");
                 continue;
             }
 
-            // Aggregate same items: group by (ItemName, IsHq) and sum quantities
+            // Keep distinct item IDs separate even when localized names match.
             var aggregated = sectionItems
-                .GroupBy(i => (i.ItemName, i.IsHq))
-                .Select(g => new { Name = g.Key.ItemName, IsHq = g.Key.IsHq, Qty = g.Sum(x => (long)x.Quantity) })
+                .GroupBy(i => (i.ItemId, i.ItemName, i.IsHq))
+                .Select(g => new { g.Key.ItemId, Name = g.Key.ItemName, IsHq = g.Key.IsHq, Qty = g.Sum(x => (long)x.Quantity) })
                 .OrderBy(a => a.Name)
                 .ToList();
 
@@ -180,10 +192,19 @@ public partial class MainWindow
             ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, Scale(30f));
             ImGui.TableHeadersRow();
 
+            var sheet = plugin.Services.DataManager.GetExcelSheet<Item>();
             foreach (var item in aggregated)
             {
                 ImGui.TableNextRow();
-                ImGui.TableNextColumn(); ImGui.Text(item.Name);
+                ImGui.TableNextColumn();
+                if (sheet != null && sheet.TryGetRow(item.ItemId, out var itemRow)
+                    && Plugin.TextureProvider.GetFromGameIcon(new GameIconLookup(itemRow.Icon, item.IsHq)).TryGetWrap(out var icon, out _))
+                {
+                    ImGui.Image(icon.Handle, ScaledVector(20f, 20f));
+                    ImGui.SameLine();
+                }
+                ImGui.Text(item.Name);
+                DrawSearchItemHoverTooltip(item.ItemId, item.IsHq);
                 ImGui.TableNextColumn(); ImGui.Text($"{item.Qty:N0}");
                 ImGui.TableNextColumn();
                 if (item.IsHq) ImGui.TextColored(new Vector4(0.3f, 1.0f, 0.5f, 1.0f), "HQ");

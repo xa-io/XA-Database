@@ -4,13 +4,14 @@ namespace XADatabase.Services;
 
 internal static class IpcContractInfo
 {
-    public const int CurrentVersion = 7;
+    public const int CurrentVersion = 8;
     public const int CharacterSummaryJsonVersion = 2;
     public const int AccountCharacterListJsonVersion = 1;
     public const int LastSnapshotResultJsonVersion = 4;
     public const int CurrentCharacterItemsJsonVersion = 1;
     public const int AetheryteListJsonVersion = 1;
-    public const int ChannelCount = 25;
+    public const int StorageItemsJsonVersion = 1;
+    public const int ChannelCount = 26;
 
     public const string Save = "XA.Database.Save";
     public const string Refresh = "XA.Database.Refresh";
@@ -37,6 +38,7 @@ internal static class IpcContractInfo
     public const string GetAllCharacterAetherytesJson = "XA.Database.GetAllCharacterAetherytesJson";
     public const string HasAetheryte = "XA.Database.HasAetheryte";
     public const string CharacterHasAetheryte = "XA.Database.CharacterHasAetheryte";
+    public const string SearchCharacterStorageItemsJson = "XA.Database.SearchCharacterStorageItemsJson";
 
     public static IReadOnlyList<string> ChannelNames { get; } = new[]
     {
@@ -46,5 +48,6 @@ internal static class IpcContractInfo
         GetAccountCharacterListJson, GetLastSnapshotResultJson, SearchItems,
         GetMatchingCharactersForItems, SearchCurrentCharacterItemsJson,
         GetCharacterAetherytesJson, GetAllCharacterAetherytesJson, HasAetheryte, CharacterHasAetheryte,
+        SearchCharacterStorageItemsJson,
     };
 }

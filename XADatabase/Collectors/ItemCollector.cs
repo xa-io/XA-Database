@@ -107,7 +107,8 @@ public static class ItemCollector
         return results;
     }
 
-    public static SectionResult<ItemCollectionResult> CollectSection(XaServices services, bool saddlebagClosing = false)
+    public static SectionResult<ItemCollectionResult> CollectSection(XaServices services, bool saddlebagClosing = false,
+        bool glamourDresserClosing = false)
     {
         try
         {
@@ -119,10 +120,12 @@ public static class ItemCollector
             if (!value.ManagerReady)
                 return SectionResult<ItemCollectionResult>.Unavailable(value, "inventory manager is not ready");
 
+            StorageItemCollector.Collect(services, value, glamourDresserClosing);
+
             if (value.LoadedContainers.Count == 0)
                 return SectionResult<ItemCollectionResult>.Unavailable(value, "no coherent inventory containers are readable");
 
-            var missing = TrackedContainers.Length - value.LoadedContainers.Count;
+            var missing = TrackedContainers.Length + 2 - value.LoadedContainers.Count;
             var detail = missing > 0
                 ? $"{missing} containers were unavailable; only those containers retained their previous data"
                 : string.Empty;

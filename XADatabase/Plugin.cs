@@ -32,6 +32,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
     [PluginService] internal static IContextMenu ContextMenu { get; private set; } = null!;
     [PluginService] internal static IGameInteropProvider GameInterop { get; private set; } = null!;
+    [PluginService] internal static ITextureProvider TextureProvider { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
     private const string CommandName = "/xadatabase";
@@ -127,7 +128,7 @@ public sealed class Plugin : IDalamudPlugin
         IpcFacade = new IpcFacade(MainWindow, DatabaseService, Services.PlayerState, Services.ClientState);
         if (Configuration.OpenPluginOnLoad)
             MainWindow.IsOpen = true;
-        ItemLocationTooltip = new ItemLocationTooltipService(this, GameInterop, GameGui, Log);
+        ItemLocationTooltip = new ItemLocationTooltipService(this, GameInterop, Log);
         ItemSearchContextMenu = new ItemSearchContextMenuService(
             ContextMenu,
             Log,
@@ -166,7 +167,12 @@ public sealed class Plugin : IDalamudPlugin
         // Enable addon watcher — single callback for all transient addon closes
         AddonWatcher.Enable(
             onAddonClose: (trigger) => MainWindow.OnAddonSaveTrigger(trigger),
-            onAddonOpen: (trigger) => MainWindow.OnAddonOpenTrigger(trigger)
+            onAddonOpen: (trigger) => MainWindow.OnAddonOpenTrigger(trigger),
+            onStorageRefresh: () =>
+            {
+                MainWindow.CaptureLiveInventory();
+                MainWindow.QueueInventoryCapture();
+            }
         );
 
         Log.Information($"[XA] Plugin loaded successfully.");
@@ -366,5 +372,5 @@ public sealed class Plugin : IDalamudPlugin
 
 internal static class BuildInfo
 {
-    public const string Version = "0.0.0.45";
+    public const string Version = "0.0.0.46";
 }

@@ -1279,7 +1279,7 @@ public partial class MainWindow : Window, IDisposable
     public void OnAddonOpenTrigger(AddonTriggerEvent trigger)
     {
         CaptureLiveInventory();
-        QueueInventoryCapture();
+        QueueInventoryCapture(storageOpened: trigger.Category is "Armoire" or "Glamour Dresser");
         if (!plugin.Services.PlayerState.IsLoaded || viewingContentId.HasValue)
             return;
 
@@ -1315,7 +1315,8 @@ public partial class MainWindow : Window, IDisposable
     public void OnAddonSaveTrigger(AddonTriggerEvent trigger)
     {
         // Capture while the addon/container is still readable, even with autosave disabled.
-        CaptureLiveInventory(saddlebagClosing: trigger.Category == "Saddlebag");
+        CaptureLiveInventory(saddlebagClosing: trigger.Category == "Saddlebag",
+            glamourDresserClosing: trigger.AddonName is "MiragePrismBox" or "MiragePrismPrismBox");
         if (trigger.Category == "Journal" && trigger.AddonName == "Journal")
             CaptureLiveJournal(trigger.AddonPtr);
         if (!plugin.Services.ClientState.IsLoggedIn || !plugin.Services.PlayerState.IsLoaded)
@@ -2023,6 +2024,7 @@ public partial class MainWindow : Window, IDisposable
         try
         {
             plugin.DatabaseService.ClearAllCharacterData();
+            liveStorageObservations.Clear();
             BeginCharacterSession();
             JournalCollector.ClearPersistedValues();
             cachedAetherytes = new AetheryteSnapshot();
@@ -2183,6 +2185,8 @@ public partial class MainWindow : Window, IDisposable
         try
         {
             plugin.CharacterRepo.Delete(contentId);
+            if (plugin.Services.PlayerState.ContentId == contentId)
+                liveStorageObservations.Clear();
 
             if (viewingContentId.HasValue && viewingContentId.Value == contentId)
             {

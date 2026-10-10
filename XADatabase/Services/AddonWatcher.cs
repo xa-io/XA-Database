@@ -18,6 +18,7 @@ public sealed class AddonWatcher : IDisposable
     private readonly IPluginLog log;
     private Action<AddonTriggerEvent>? onAddonClose;
     private Action<AddonTriggerEvent>? onAddonOpen;
+    private Action? onStorageRefresh;
     private bool enabled;
 
     // Debug: track which addons are currently open
@@ -41,7 +42,7 @@ public sealed class AddonWatcher : IDisposable
         ("Market", new[] { "ItemSearch", "ItemSearchResult", "ItemHistory" }),
         ("NPC", new[] { "Repair", "Shop", "LetterList", "LetterViewer" }),
         ("FC Chest", new[] { "FreeCompanyChest", "FreeCompanyChestLog" }),
-        ("Armoire", new[] { "Cabinet" }),
+        ("Armoire", new[] { "Cabinet", "CabinetWithdraw" }),
         ("Armoury Chest", new[] { "ArmouryBoard" }),
         ("Glamour Dresser", new[] { "MiragePrismBox", "MiragePrismMiragePlate", "MiragePrismPrismBox" }),
         ("FC Members", new[] { "FreeCompany", "FreeCompanyProfile" }),
@@ -82,10 +83,12 @@ public sealed class AddonWatcher : IDisposable
         this.log = log;
     }
 
-    public void Enable(Action<AddonTriggerEvent>? onAddonClose = null, Action<AddonTriggerEvent>? onAddonOpen = null)
+    public void Enable(Action<AddonTriggerEvent>? onAddonClose = null, Action<AddonTriggerEvent>? onAddonOpen = null,
+        Action? onStorageRefresh = null)
     {
         this.onAddonClose = onAddonClose;
         this.onAddonOpen = onAddonOpen;
+        this.onStorageRefresh = onStorageRefresh;
 
         if (enabled)
         {
@@ -111,6 +114,8 @@ public sealed class AddonWatcher : IDisposable
                 addonLifecycle.RegisterListener(AddonEvent.PostOpen, addon, OnAddonOpen);
                 addonLifecycle.RegisterListener(AddonEvent.PreClose, addon, OnTransientClose);
                 addonLifecycle.RegisterListener(AddonEvent.PreFinalize, addon, OnTransientClose);
+                if (AddonToCategory[addon] is "Armoire" or "Glamour Dresser")
+                    addonLifecycle.RegisterListener(AddonEvent.PostRefresh, addon, OnStorageRefresh);
             }
 
         enabled = true;
@@ -138,11 +143,19 @@ public sealed class AddonWatcher : IDisposable
                 addonLifecycle.UnregisterListener(AddonEvent.PostOpen, addon, OnAddonOpen);
                 addonLifecycle.UnregisterListener(AddonEvent.PreClose, addon, OnTransientClose);
                 addonLifecycle.UnregisterListener(AddonEvent.PreFinalize, addon, OnTransientClose);
+                if (AddonToCategory[addon] is "Armoire" or "Glamour Dresser")
+                    addonLifecycle.UnregisterListener(AddonEvent.PostRefresh, addon, OnStorageRefresh);
             }
 
         enabled = false;
         openAddons.Clear();
         log.Information("[XA] AddonWatcher disabled.");
+    }
+
+    private void OnStorageRefresh(AddonEvent type, AddonArgs args)
+    {
+        try { onStorageRefresh?.Invoke(); }
+        catch (Exception ex) { log.Warning(ex, "[XA] Storage refresh capture failed."); }
     }
 
     private void OnAddonOpen(AddonEvent type, AddonArgs args)

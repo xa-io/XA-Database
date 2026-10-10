@@ -26,7 +26,7 @@ public partial class MainWindow
 
         ImGui.Spacing();
         ImGui.TextColored(new Vector4(0.4f, 0.8f, 1.0f, 1.0f), "Item Search");
-        ImGui.TextDisabled("Search across all inventories, retainers, and saddlebags for all saved characters.");
+        ImGui.TextDisabled("Search inventories, retainers, saddlebags, armoire, and glamour dresser for all saved characters.");
         ImGui.Spacing();
 
         if (activeExactItemSearch != null)
@@ -241,7 +241,7 @@ public partial class MainWindow
         if (!plugin.Configuration.SearchHoverTooltipEnabled || !ImGui.IsItemHovered())
             return;
 
-        if (!plugin.ItemLocationTooltip.TryGetSummary(itemId, isHq, out var summary) || summary.TotalQuantity <= 0)
+        if (!plugin.ItemLocationTooltip.TryGetSummary(itemId, out var summary) || summary.TotalQuantity <= 0)
             return;
 
         var tooltipLines = ItemLocationTooltipService.BuildTooltipLines(summary, plugin.Configuration.SearchHoverTooltipCharacterLimit);

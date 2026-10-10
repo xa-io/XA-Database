@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using XADatabase.Collectors;
 using XADatabase.Core.Collection;
 using XADatabase.Core.Policies;
@@ -15,6 +16,23 @@ public partial class MainWindow
     private void ApplyInventoryCapture(SectionResult<ItemCollectionResult> items)
     {
         var readable = items.Value.LoadedContainers;
+        if (items.CanReplacePersisted)
+            liveStorageObservations.Observe(plugin.Services.PlayerState.ContentId, items.Value.Items,
+                items.Value.Summaries, readable, SnapshotTime.Format(DateTime.UtcNow));
+        foreach (var name in new[] { StorageItemCollector.ArmoireName, StorageItemCollector.DresserName })
+        {
+            if (!items.CanReplacePersisted || !readable.Contains(name))
+                continue;
+            var summary = items.Value.Summaries.FirstOrDefault(value => value.Name == name);
+            var previous = cachedInventory.FirstOrDefault(value => value.Name == name);
+            var oldItems = cachedItems.Where(value => value.ContainerName == name)
+                .Select(value => (value.SlotIndex, value.ItemId, value.Quantity, value.IsHq));
+            var newItems = items.Value.Items.Where(value => value.ContainerName == name)
+                .Select(value => (value.SlotIndex, value.ItemId, value.Quantity, value.IsHq));
+            if (summary != null && (previous == null || previous.UsedSlots != summary.UsedSlots
+                || previous.TotalSlots != summary.TotalSlots || !oldItems.SequenceEqual(newItems)))
+                plugin.Services.Log.Information($"[XA] Recorded {name}: {summary.UsedSlots}/{summary.TotalSlots} slots, {newItems.Count()} item entries.");
+        }
         ApplyCollectedSection("Items", items, value => cachedItems = InventoryContainerMerge.Merge(
             cachedItems, value.Items, readable, item => item.ContainerName));
         ApplyCollectedSection("Inventory summaries", InventoryCollector.CollectSection(plugin.Services, items),
@@ -25,7 +43,7 @@ public partial class MainWindow
             value => cachedJobs = value);
     }
 
-    public void CaptureLiveInventory(bool saddlebagClosing = false)
+    public void CaptureLiveInventory(bool saddlebagClosing = false, bool glamourDresserClosing = false)
     {
         if (!InventoryReadiness.CanCapture(plugin.Services))
             return;
@@ -37,7 +55,7 @@ public partial class MainWindow
             : !DataCollected || !InventoryCapturePolicy.IsSameOwner(cacheOwnerContentId, owner))
             return;
 
-        var observed = ItemCollector.CollectSection(plugin.Services, saddlebagClosing);
+        var observed = ItemCollector.CollectSection(plugin.Services, saddlebagClosing, glamourDresserClosing);
         if (!observed.CanReplacePersisted)
             return;
 
@@ -69,12 +87,13 @@ public partial class MainWindow
         }
     }
 
-    public void QueueInventoryCapture()
+    public void QueueInventoryCapture(bool storageOpened = false)
     {
         if (!plugin.Services.ClientState.IsLoggedIn)
             return;
         inventoryCaptureOwner = plugin.Services.PlayerState.ContentId;
-        inventoryCaptureAttempts = inventoryCaptureOwner != 0 ? 3 : 0;
+        inventoryCaptureAttempts = inventoryCaptureOwner != 0
+            ? Math.Max(inventoryCaptureAttempts, storageOpened ? 15 : 3) : 0;
         nextInventoryCaptureUtc = DateTime.UtcNow.AddMilliseconds(200);
     }
 
@@ -98,6 +117,7 @@ public partial class MainWindow
 
     public void ClearPendingCaptureAndSave()
     {
+        liveStorageObservations.Clear();
         inventoryCaptureAttempts = 0;
         inventoryCaptureOwner = 0;
         refreshAndSaveQueued = false;

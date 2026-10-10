@@ -89,6 +89,7 @@ public partial class MainWindow
             DrawIpcRow("XA.Database.SearchItems", "string", "Cross-character item search (takes query string, returns pipe-delimited results)");
             DrawIpcRow("XA.Database.GetMatchingCharactersForItems", "string", "Exact item-key match (takes comma/newline itemId:isHq keys, returns Character@World lines)");
             DrawIpcRow("XA.Database.SearchCurrentCharacterItemsJson", "string", "Current-character scoped JSON item search for automation consumers");
+            DrawIpcRow("XA.Database.SearchCharacterStorageItemsJson", "string", "Takes JSON contentId (0=current), itemIds and optional sources/isHq; returns separate armoire and glamourDresser sections");
             DrawIpcRow("XA.Database.GetCharacterAetherytesJson", "string", "Takes ulong contentId (0 = current live character); returns latest aetheryte JSON with known/capturedUtc");
             DrawIpcRow("XA.Database.GetAllCharacterAetherytesJson", "string", "Returns latest aetheryte JSON for all visible saved characters and the current live owner");
             DrawIpcRow("XA.Database.HasAetheryte", "bool", "Takes uint aetheryteId; checks the current live owner's latest known list, independent of the selected UI character");
@@ -100,6 +101,8 @@ public partial class MainWindow
         ImGui.Spacing();
         ImGui.TextWrapped("Aetheryte queries read the last observation; they do not refresh or teleport. False also means unknown, not captured, hidden, or no active owner. Inspect JSON known/capturedUtc to distinguish unavailable data from a known list without the destination. Saved access may be stale; a shared estate aetheryte ID matches any destination with that ID.");
         ImGui.Spacing();
+        ImGui.TextWrapped("Storage queries read recorded contents without opening windows or saving. Filter by itemIds to avoid large responses. Each armoire/glamourDresser section has requested and recorded flags: an empty items list proves absence only when both are true and success is true. Current-session captures are available before saving; other characters use their saved contents.");
+        ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
 
@@ -108,6 +111,8 @@ public partial class MainWindow
         ImGui.TextDisabled("var save = pluginInterface.GetIpcSubscriber<object>(\"XA.Database.Save\");");
         ImGui.TextDisabled("var isReady = pluginInterface.GetIpcSubscriber<bool>(\"XA.Database.IsReady\");");
         ImGui.TextDisabled("var searchCurrent = pluginInterface.GetIpcSubscriber<string, string>(\"XA.Database.SearchCurrentCharacterItemsJson\");");
+        ImGui.TextDisabled("var storage = pluginInterface.GetIpcSubscriber<string, string>(\"XA.Database.SearchCharacterStorageItemsJson\");");
+        ImGui.TextDisabled("var result = storage.InvokeFunc(\"{\\\"contentId\\\":0,\\\"itemIds\\\":[3572]}\");");
         ImGui.TextDisabled("var hasAetheryte = pluginInterface.GetIpcSubscriber<uint, bool>(\"XA.Database.HasAetheryte\");");
         ImGui.TextDisabled("var characterHasAetheryte = pluginInterface.GetIpcSubscriber<ulong, uint, bool>(\"XA.Database.CharacterHasAetheryte\");");
         ImGui.TextDisabled("if (isReady.InvokeFunc()) save.InvokeAction();");

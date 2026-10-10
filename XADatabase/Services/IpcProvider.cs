@@ -41,6 +41,7 @@ public sealed class IpcProvider : IDisposable
     private readonly ICallGateProvider<string> getAllCharacterAetherytesJsonProvider;
     private readonly ICallGateProvider<uint, bool> hasAetheryteProvider;
     private readonly ICallGateProvider<ulong, uint, bool> characterHasAetheryteProvider;
+    private readonly ICallGateProvider<string, string> searchCharacterStorageItemsJsonProvider;
 
     public IpcProvider(IDalamudPluginInterface pluginInterface, IPluginLog log, IFramework framework)
     {
@@ -71,6 +72,7 @@ public sealed class IpcProvider : IDisposable
         getAllCharacterAetherytesJsonProvider = pluginInterface.GetIpcProvider<string>(IpcContractInfo.GetAllCharacterAetherytesJson);
         hasAetheryteProvider = pluginInterface.GetIpcProvider<uint, bool>(IpcContractInfo.HasAetheryte);
         characterHasAetheryteProvider = pluginInterface.GetIpcProvider<ulong, uint, bool>(IpcContractInfo.CharacterHasAetheryte);
+        searchCharacterStorageItemsJsonProvider = pluginInterface.GetIpcProvider<string, string>(IpcContractInfo.SearchCharacterStorageItemsJson);
     }
 
     public void Initialize(IpcFacade facade)
@@ -118,6 +120,8 @@ public sealed class IpcProvider : IDisposable
                 Register(getAllCharacterAetherytesJsonProvider, IpcContractInfo.GetAllCharacterAetherytesJson, facade.GetAllCharacterAetherytesJson, string.Empty);
                 Register(hasAetheryteProvider, IpcContractInfo.HasAetheryte, facade.HasAetheryte, false);
                 Register(characterHasAetheryteProvider, IpcContractInfo.CharacterHasAetheryte, facade.CharacterHasAetheryte, false);
+                Register(searchCharacterStorageItemsJsonProvider, IpcContractInfo.SearchCharacterStorageItemsJson,
+                    facade.SearchCharacterStorageItemsJson, XADatabase.Models.StorageItemAccess.Failure("Storage IPC is unavailable."));
                 initialized = true;
                 log.Information($"[XA] IPC handlers initialized ({IpcContractInfo.ChannelCount} channels, contract v{IpcContractInfo.CurrentVersion}).");
             }
