@@ -125,14 +125,10 @@ public static class ItemCollector
             if (value.LoadedContainers.Count == 0)
                 return SectionResult<ItemCollectionResult>.Unavailable(value, "no coherent inventory containers are readable");
 
-            var missing = TrackedContainers.Length + 2 - value.LoadedContainers.Count;
-            var detail = missing > 0
-                ? $"{missing} containers were unavailable; only those containers retained their previous data"
-                : string.Empty;
-
+            // Only readable containers are authoritative; the merge retains all others.
             return value.Items.Count == 0
-                ? SectionResult<ItemCollectionResult>.AuthoritativeEmpty(value, detail)
-                : SectionResult<ItemCollectionResult>.Available(value, detail);
+                ? SectionResult<ItemCollectionResult>.AuthoritativeEmpty(value)
+                : SectionResult<ItemCollectionResult>.Available(value);
         }
         catch (Exception ex)
         {
