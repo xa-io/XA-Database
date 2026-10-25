@@ -7,6 +7,7 @@ using Dalamud.Game.Text.SeStringHandling.Payloads;
 using Dalamud.Hooking;
 using Dalamud.Memory;
 using Dalamud.Plugin.Services;
+using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using XADatabase.Database;
@@ -26,7 +27,7 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
     private readonly Plugin plugin;
     private readonly IPluginLog log;
     private readonly object syncRoot = new();
-    private Hook<GenerateItemTooltipDelegate>? generateItemTooltipHook;
+    private Hook<AddonItemDetail.Delegates.GenerateItemTooltip>? generateItemTooltipHook;
 
     private readonly Dictionary<ulong, CachedCharacterTooltipSnapshot> cachedSnapshotItems = new();
     private Dictionary<uint, OwnedItemTooltipSummary> cachedSummaries = new();
@@ -35,11 +36,6 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
 
     public bool IsHookAvailable => generateItemTooltipHook?.IsEnabled == true;
     public string HookStatus { get; private set; } = "Unavailable - item tooltip hook has not been resolved.";
-
-    private delegate void* GenerateItemTooltipDelegate(
-        AtkUnitBase* addon,
-        NumberArrayData* numberArrayData,
-        StringArrayData* stringArrayData);
 
     public ItemLocationTooltipService(
         Plugin plugin,
@@ -53,7 +49,7 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
 
         try
         {
-            generateItemTooltipHook = gameInterop.HookFromSignature<GenerateItemTooltipDelegate>(
+            generateItemTooltipHook = gameInterop.HookFromSignature<AddonItemDetail.Delegates.GenerateItemTooltip>(
                 GenerateItemTooltipSignature,
                 GenerateItemTooltipDetour);
             generateItemTooltipHook.Enable();
@@ -244,8 +240,8 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
         return lines;
     }
 
-    private void* GenerateItemTooltipDetour(
-        AtkUnitBase* addon,
+    private void GenerateItemTooltipDetour(
+        AddonItemDetail* addon,
         NumberArrayData* numberArrayData,
         StringArrayData* stringArrayData)
     {
@@ -259,7 +255,7 @@ public sealed unsafe class ItemLocationTooltipService : IDisposable
             log.Warning(ex, "[XA] Failed to populate the item-location tooltip.");
         }
 
-        return generateItemTooltipHook!.Original(addon, numberArrayData, stringArrayData);
+        generateItemTooltipHook!.Original(addon, numberArrayData, stringArrayData);
     }
 
     private void AppendOwnershipSummary(NumberArrayData* numberArrayData, StringArrayData* stringArrayData)
