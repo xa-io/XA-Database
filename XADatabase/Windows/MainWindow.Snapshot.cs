@@ -723,7 +723,7 @@ public partial class MainWindow
 
             foreach (var item in snapshot.AllItems)
             {
-                if (string.IsNullOrWhiteSpace(item.ItemName) || item.ItemName.IndexOf(searchText, StringComparison.OrdinalIgnoreCase) < 0)
+                if (string.IsNullOrWhiteSpace(item.ItemName) || !LocalizedText.Contains(item.ItemName, searchText))
                     continue;
 
                 results.Add(new ItemLocationResult
@@ -742,7 +742,7 @@ public partial class MainWindow
 
             foreach (var item in snapshot.RetainerItems)
             {
-                if (string.IsNullOrWhiteSpace(item.ItemName) || item.ItemName.IndexOf(searchText, StringComparison.OrdinalIgnoreCase) < 0)
+                if (string.IsNullOrWhiteSpace(item.ItemName) || !LocalizedText.Contains(item.ItemName, searchText))
                     continue;
 
                 results.Add(new ItemLocationResult
@@ -761,9 +761,9 @@ public partial class MainWindow
         }
 
         var orderedResults = results
-            .OrderBy(r => r.ItemName, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(r => r.CharacterName, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(r => r.ContainerName, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(r => r.ItemName, LocalizedText.Comparer)
+            .ThenBy(r => r.CharacterName, LocalizedText.Comparer)
+            .ThenBy(r => r.ContainerName, LocalizedText.Comparer)
             .ToList();
 
         if (maxResults.HasValue)

@@ -8,6 +8,8 @@ using Lumina.Excel.Sheets;
 using XADatabase.Database;
 using XADatabase.Services;
 
+using XADatabase.Models;
+
 namespace XADatabase.Windows;
 
 /// <summary>
@@ -59,8 +61,8 @@ public partial class MainWindow
             var grouped = itemSearchResults
                 .GroupBy(r => (r.CharacterName, r.World, Location: SimplifyContainerName(r.ContainerName), r.ItemName, r.ItemId, r.IsHq))
                 .Select(g => (g.Key.ItemName, Qty: g.Sum(r => r.Quantity), g.Key.IsHq, Location: g.Key.Location, Char: $"{g.Key.CharacterName} @ {g.Key.World}", g.Key.ItemId))
-                .OrderBy(r => r.ItemName, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(r => r.Char, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(r => r.ItemName, LocalizedText.Comparer)
+                .ThenBy(r => r.Char, LocalizedText.Comparer)
                 .ToList();
             var totalQuantity = grouped.Sum(result => (long)result.Qty);
 
@@ -92,11 +94,11 @@ public partial class MainWindow
                         {
                             int cmp = spec.ColumnIndex switch
                             {
-                                0 => string.Compare(a.ItemName, b.ItemName, StringComparison.OrdinalIgnoreCase),
+                                0 => LocalizedText.Compare(a.ItemName, b.ItemName),
                                 1 => a.Qty.CompareTo(b.Qty),
                                 2 => a.IsHq.CompareTo(b.IsHq),
-                                3 => string.Compare(a.Location, b.Location, StringComparison.OrdinalIgnoreCase),
-                                4 => string.Compare(a.Char, b.Char, StringComparison.OrdinalIgnoreCase),
+                                3 => LocalizedText.Compare(a.Location, b.Location),
+                                4 => LocalizedText.Compare(a.Char, b.Char),
                                 _ => 0,
                             };
                             return asc ? cmp : -cmp;
@@ -207,8 +209,8 @@ public partial class MainWindow
 
         var orderedResults = results
             .OrderByDescending(r => SnapshotTime.TryParseUtc(r.UpdatedUtc, out var updatedUtc) ? updatedUtc : DateTime.MinValue)
-            .ThenBy(r => r.CharacterName, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(r => r.ContainerName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(r => r.CharacterName, LocalizedText.Comparer)
+            .ThenBy(r => r.ContainerName, LocalizedText.Comparer)
             .ToList();
 
         return maxResults.HasValue ? orderedResults.Take(maxResults.Value).ToList() : orderedResults;

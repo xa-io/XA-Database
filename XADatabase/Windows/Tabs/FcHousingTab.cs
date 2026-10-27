@@ -241,10 +241,10 @@ public partial class MainWindow
                             {
                                 int cmp = col switch
                                 {
-                                    0 => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase),
+                                    0 => LocalizedText.Compare(a.Name, b.Name),
                                     1 => a.RankSort.CompareTo(b.RankSort),
-                                    2 => string.Compare(a.JobName, b.JobName, StringComparison.OrdinalIgnoreCase),
-                                    3 => string.Compare(a.HomeWorldName, b.HomeWorldName, StringComparison.OrdinalIgnoreCase),
+                                    2 => LocalizedText.Compare(a.JobName, b.JobName),
+                                    3 => LocalizedText.Compare(a.HomeWorldName, b.HomeWorldName),
                                     4 => a.OnlineStatus.CompareTo(b.OnlineStatus),
                                     _ => 0,
                                 };

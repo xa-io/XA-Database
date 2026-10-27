@@ -194,7 +194,7 @@ public partial class MainWindow
                     var stackedRetItems = retItems
                         .GroupBy(i => (i.ItemName, i.ItemId, i.IsHq))
                         .Select(g => (Name: g.Key.ItemName, Id: g.Key.ItemId, Hq: g.Key.IsHq, Qty: g.Sum(i => i.Quantity)))
-                        .OrderBy(i => i.Name)
+                        .OrderBy(i => i.Name, LocalizedText.Comparer)
                         .ToList();
 
                     ImGui.TextColored(new Vector4(0.4f, 0.8f, 1.0f, 1.0f),
@@ -281,7 +281,7 @@ public partial class MainWindow
                 var stackedFlatItems = cachedRetainerItems
                     .GroupBy(i => (i.RetainerName, i.ItemName, i.ItemId, i.IsHq))
                     .Select(g => (Retainer: g.Key.RetainerName, Name: g.Key.ItemName, Id: g.Key.ItemId, Hq: g.Key.IsHq, Qty: g.Sum(i => i.Quantity)))
-                    .OrderBy(i => i.Retainer).ThenBy(i => i.Name)
+                    .OrderBy(i => i.Retainer, LocalizedText.Comparer).ThenBy(i => i.Name, LocalizedText.Comparer)
                     .ToList();
 
                 ImGui.Spacing();
@@ -310,8 +310,8 @@ public partial class MainWindow
                                 {
                                     int cmp = spec.ColumnIndex switch
                                     {
-                                        0 => string.Compare(a.Retainer, b.Retainer, StringComparison.OrdinalIgnoreCase),
-                                        1 => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase),
+                                        0 => LocalizedText.Compare(a.Retainer, b.Retainer),
+                                        1 => LocalizedText.Compare(a.Name, b.Name),
                                         2 => a.Qty.CompareTo(b.Qty),
                                         3 => a.Hq.CompareTo(b.Hq),
                                         4 => a.Id.CompareTo(b.Id),

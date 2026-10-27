@@ -75,10 +75,10 @@ public static class AetheryteCatalog
         var query = filter?.Trim() ?? string.Empty;
         var visible = rows.Where(row => query.Length == 0
                 || row.Destination.AetheryteId.ToString(CultureInfo.InvariantCulture).Contains(query, StringComparison.Ordinal)
-                || row.Destination.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
-                || row.Destination.TerritoryName.Contains(query, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(row => row.Destination.TerritoryName, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(row => row.Destination.Name, StringComparer.OrdinalIgnoreCase)
+                || LocalizedText.Contains(row.Destination.Name, query)
+                || LocalizedText.Contains(row.Destination.TerritoryName, query))
+            .OrderBy(row => row.Destination.TerritoryName, LocalizedText.Comparer)
+            .ThenBy(row => row.Destination.Name, LocalizedText.Comparer)
             .ThenBy(row => row.Destination.AetheryteId)
             .ThenBy(row => row.Destination.SubIndex)
             .ThenBy(row => row.Destination.Ward)

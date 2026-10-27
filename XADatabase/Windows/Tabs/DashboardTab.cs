@@ -159,10 +159,10 @@ public partial class MainWindow
                             {
                                 cmp = col switch
                                 {
-                                    0 => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase),
-                                    1 => string.Compare(a.World, b.World, StringComparison.OrdinalIgnoreCase),
-                                    2 => string.Compare(a.Server, b.Server, StringComparison.OrdinalIgnoreCase),
-                                    3 => string.Compare(a.Region, b.Region, StringComparison.OrdinalIgnoreCase),
+                                    0 => LocalizedText.Compare(a.Name, b.Name),
+                                    1 => LocalizedText.Compare(a.World, b.World),
+                                    2 => LocalizedText.Compare(a.Server, b.Server),
+                                    3 => LocalizedText.Compare(a.Region, b.Region),
                                     4 => a.Gil.CompareTo(b.Gil),
                                     5 => a.RetainerGil.CompareTo(b.RetainerGil),
                                     6 => a.FcChestGil.CompareTo(b.FcChestGil),
@@ -171,7 +171,7 @@ public partial class MainWindow
                                     9 => a.Listings.CompareTo(b.Listings),
                                     10 => a.VenturesReady.CompareTo(b.VenturesReady),
                                     11 => a.LeveAllowances.CompareTo(b.LeveAllowances),
-                                    12 => string.Compare(a.FcName, b.FcName, StringComparison.OrdinalIgnoreCase),
+                                    12 => LocalizedText.Compare(a.FcName, b.FcName),
                                     13 => string.Compare(a.LastSeen, b.LastSeen, StringComparison.Ordinal),
                                     _ => 0,
                                 };
@@ -388,8 +388,8 @@ public partial class MainWindow
                         {
                             int cmp = spec.ColumnIndex switch
                             {
-                                0 => string.Compare(a.Location, b.Location, StringComparison.OrdinalIgnoreCase),
-                                1 => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase),
+                                0 => LocalizedText.Compare(a.Location, b.Location),
+                                1 => LocalizedText.Compare(a.Name, b.Name),
                                 2 => a.Completed != b.Completed ? a.Completed.CompareTo(b.Completed) : a.Total.CompareTo(b.Total),
                                 3 => a.Percent.CompareTo(b.Percent),
                                 _ => 0,
@@ -473,8 +473,8 @@ public partial class MainWindow
                         {
                             int cmp = col switch
                             {
-                                0 => string.Compare(a.Location, b.Location, StringComparison.OrdinalIgnoreCase),
-                                1 => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase),
+                                0 => LocalizedText.Compare(a.Location, b.Location),
+                                1 => LocalizedText.Compare(a.Name, b.Name),
                                 2 => a.MountsU.CompareTo(b.MountsU),
                                 3 => a.MinionsU.CompareTo(b.MinionsU),
                                 4 => a.OrchU.CompareTo(b.OrchU),

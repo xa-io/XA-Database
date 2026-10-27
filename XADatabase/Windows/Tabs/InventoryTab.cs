@@ -80,7 +80,7 @@ public partial class MainWindow
             var invGrouped = itemSearchResults
                 .GroupBy(r => (r.CharacterName, r.World, Location: SimplifyContainerName(r.ContainerName), r.ItemName, r.ItemId, r.IsHq))
                 .Select(g => (g.Key.ItemName, Qty: g.Sum(r => r.Quantity), g.Key.IsHq, Location: g.Key.Location, Char: $"{g.Key.CharacterName} @ {g.Key.World}"))
-                .OrderBy(r => r.ItemName).ThenBy(r => r.Char)
+                .OrderBy(r => r.ItemName, LocalizedText.Comparer).ThenBy(r => r.Char, LocalizedText.Comparer)
                 .ToList();
 
             ImGui.Spacing();
@@ -106,11 +106,11 @@ public partial class MainWindow
                             {
                                 int cmp = spec.ColumnIndex switch
                                 {
-                                    0 => string.Compare(a.ItemName, b.ItemName, StringComparison.OrdinalIgnoreCase),
+                                    0 => LocalizedText.Compare(a.ItemName, b.ItemName),
                                     1 => a.Qty.CompareTo(b.Qty),
                                     2 => a.IsHq.CompareTo(b.IsHq),
-                                    3 => string.Compare(a.Location, b.Location, StringComparison.OrdinalIgnoreCase),
-                                    4 => string.Compare(a.Char, b.Char, StringComparison.OrdinalIgnoreCase),
+                                    3 => LocalizedText.Compare(a.Location, b.Location),
+                                    4 => LocalizedText.Compare(a.Char, b.Char),
                                     _ => 0,
                                 };
                                 return asc ? cmp : -cmp;
@@ -179,7 +179,7 @@ public partial class MainWindow
             var aggregated = sectionItems
                 .GroupBy(i => (i.ItemId, i.ItemName, i.IsHq))
                 .Select(g => new { g.Key.ItemId, Name = g.Key.ItemName, IsHq = g.Key.IsHq, Qty = g.Sum(x => (long)x.Quantity) })
-                .OrderBy(a => a.Name)
+                .OrderBy(a => a.Name, LocalizedText.Comparer)
                 .ToList();
 
             using var itemTable = ImRaii.Table($"InvSection_{sectionName}", 3,

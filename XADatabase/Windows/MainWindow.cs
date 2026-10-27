@@ -1689,8 +1689,8 @@ public partial class MainWindow : Window, IDisposable
         row.Apartment = cachedApartment;
 
         knownCharacters = knownCharacters
-            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(c => c.World, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(c => c.Name, LocalizedText.Comparer)
+            .ThenBy(c => c.World, LocalizedText.Comparer)
             .ToList();
         charListQueried = true;
         xaCharacterSnapshotCount = Math.Max(xaCharacterSnapshotCount, knownCharacters.Count);
@@ -2333,7 +2333,7 @@ public partial class MainWindow : Window, IDisposable
                     var label = $"{c.Name} @ {c.World}";
 
                     if (!string.IsNullOrEmpty(charSelectorSearch)
-                        && !label.Contains(charSelectorSearch, StringComparison.OrdinalIgnoreCase))
+                        && !LocalizedText.Contains(label, charSelectorSearch))
                         continue;
 
                     var isSelected = viewingContentId.HasValue && viewingContentId.Value == c.ContentId;
